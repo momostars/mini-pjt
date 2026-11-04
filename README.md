@@ -103,6 +103,19 @@ class ActionItem(BaseModel):
     duplicate_of: str | None       # 중복 의심 기존 할 일 ID (승인 시 신규 등록 대신 기한 변경)
     confidence: float
 
+class Decision(BaseModel):
+    id: str
+    summary: str                   # "대시보드 위젯 최대 12개, 지연 로딩 적용"
+    topic: str                     # 안건명. 과거 결정 검색 키 ("대시보드 위젯")
+    evidence: str                  # 근거가 된 원문 문장
+    conflicts_with: list[str] = [] # 충돌하는 과거 결정 출처 (Context Agent가 채움)
+
+class OpenIssue(BaseModel):        # 미결 이슈. 할 일로 등록하지 않고 보고서에만 표시
+    id: str
+    summary: str                   # "다이제스트 발송 시간 미정"
+    follow_up: str | None          # "11/4 기획회의에서 결정" 같은 후속 처리 원문
+    evidence: str                  # 근거가 된 원문 문장
+
 class MeetingState(TypedDict):
     messages: Annotated[list, add_messages]
     intent: Literal["minutes", "schedule", "conflict_check", "out_of_scope", "empty"]
@@ -112,6 +125,7 @@ class MeetingState(TypedDict):
     plan: list[str]
     decisions: list[Decision]
     action_items: list[ActionItem]
+    open_issues: list[OpenIssue]
     related_context: list[Document]
     review_status: Literal["pending", "approved", "edited", "rejected"]
     registered: list[str]          # 등록된 task / event ID
