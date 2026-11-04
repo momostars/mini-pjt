@@ -298,11 +298,13 @@ class Toolbox:
 
     async def call(self, name: str, args: dict, config=None):
         """도구를 호출한다. 실패하면 ToolCallError(사람이 읽을 메시지)를 낸다."""
+        from src.guardrails import scrub  # 도구 미들웨어: 인자와 결과에서 PII 제거
+
         try:
-            out = await self.tools[name].ainvoke(args, config=config)
+            out = await self.tools[name].ainvoke(scrub(args), config=config)
         except Exception as e:  # MCP 도구 오류(isError), 입력 검증 오류 등
-            raise ToolCallError(f"{name} 실패: {e}") from e
-        return _parse_output(out)
+            raise ToolCallError(scrub(f"{name} 실패: {e}")) from e
+        return scrub(_parse_output(out))
 
 
 @asynccontextmanager

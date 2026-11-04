@@ -90,6 +90,25 @@ def test_homonym_lee_seoyeon():
     assert ids(find_employee("이서연", team="프론트엔드")) == ["E013"]
 
 
+@pytest.mark.parametrize("query, expected", [
+    ("민준님", ["E006"]),                      # 조직도 등록 호칭이 우선
+    ("민준 프로", ["E006", "E018"]),            # 이름+프로 → 동명이인 둘 다 후보
+    ("민준프로", ["E006", "E018"]),
+    ("김민준 프로", ["E006", "E018"]),
+    ("김민준 책임님", ["E006"]),                 # 직급이 있으면 좁힌다
+    ("민준 선임님", ["E018"]),
+    ("서연 매니저", ["E007", "E013"]),
+    ("하린씨", ["E025"]),
+    ("하린 프로", ["E025"]),
+    ("보석 프로", ["E022"]),                    # 황보석: 황+보석으로도 읽음
+    ("황보 프로", ["E022"]),                    # 황보+석으로도 읽음
+    ("박 프로", ["E008", "E019"]),              # 성+프로 → 같은 성 전원
+    ("황보석프로님", ["E022"]),
+])
+def test_honorific_variants(query, expected):
+    assert ids(find_employee(query)) == expected
+
+
 def test_park_seonim_is_ambiguous():
     r = find_employee("박 선임")
     assert ids(r) == ["E008", "E019"]

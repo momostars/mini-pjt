@@ -7,7 +7,9 @@
 
 from langchain_core.runnables import RunnableConfig
 
+from src.guardrails import MAX_BULK
 from src.nodes.common import toolbox
+from src.nodes.review import count_operations
 from src.state import ActionItem, EventDraft
 from src.tools import ToolCallError
 
@@ -15,6 +17,11 @@ from src.tools import ToolCallError
 async def execute(state: dict, config: RunnableConfig) -> dict:
     if state.get("review_status") != "approved":  # 승인 없이 등록하지 않는다 (이중 확인)
         return {"done": ["executor"]}
+
+    ops = count_operations(state)
+    if ops >= MAX_BULK and not state.get("bulk_confirmed"):  # 실행 가드레일: 대량 등록은 따로 확인
+        return {"failed": [f"등록·변경이 {ops}건이라 멈췄습니다. 'approve all'로 다시 승인해 주세요."],
+                "done": ["executor"]}
 
     tb = toolbox(config)
     source = (state.get("meeting_meta") or {}).get("source")
@@ -37,6 +44,8 @@ async def execute(state: dict, config: RunnableConfig) -> dict:
 
     item: ActionItem
     for item in state.get("action_items", []):
+        if item.excluded:
+            continue
         try:
             if item.duplicate_of:
                 if item.due_date:

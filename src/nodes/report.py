@@ -2,6 +2,7 @@
 
 from langchain_core.messages import AIMessage
 
+from src.guardrails import scrub
 from src.nodes.review import _item_row
 
 
@@ -29,7 +30,7 @@ def _minutes_report(state: dict) -> list[str]:
         for n in a.notes:
             lines.append(f"  - {n}")
 
-    unresolved = [a for a in items if not a.assignee_id and not a.duplicate_of]
+    unresolved = [a for a in items if not a.assignee_id and not a.duplicate_of and not a.excluded]
     if unresolved:
         lines.append("\n## 미확정 항목 (등록하지 않음)")
         lines += [f"- [{a.id}] {a.title}: 담당자 지정 필요" for a in unresolved]
@@ -67,7 +68,7 @@ def _event_report(state: dict) -> list[str]:
 
 def report(state: dict) -> dict:
     intent = state.get("intent")
-    if state.get("report") and intent in ("out_of_scope", "empty"):
+    if state.get("report") and (intent in ("out_of_scope", "empty") or state.get("blocked")):
         text = state["report"]
     else:
         if intent == "conflict_check":
@@ -88,4 +89,7 @@ def report(state: dict) -> dict:
             lines.append("\n## 결과\n- 승인 전이라 등록하지 않았습니다.")
         text = "\n".join(lines)
 
+    if notes := state.get("guard_notes"):
+        text = "\n".join(f"> ℹ {n}" for n in notes) + "\n\n" + text
+    text = scrub(text)  # 출력 가드레일: 최종 보고서 PII 재검사
     return {"report": text, "messages": [AIMessage(content=text)], "done": ["report"]}

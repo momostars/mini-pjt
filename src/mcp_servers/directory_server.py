@@ -7,12 +7,17 @@ import re
 
 from mcp.server.fastmcp import FastMCP
 
-from src.mcp_servers.common import employees, load_org, public_employee
+from src.mcp_servers.common import (
+    employees,
+    given_names,
+    load_org,
+    public_employee,
+    split_honorific,
+    surnames,
+)
 
 mcp = FastMCP("directory-server", log_level="WARNING")
 
-TITLES = ("수석", "책임", "선임", "사원")
-POSITIONS = ("팀장",)
 MAX_RESULTS = 5
 
 
@@ -20,15 +25,11 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
-def _parse_name(raw: str) -> tuple[str, str | None]:
-    """'이서연 책임님' → ('이서연', '책임'). 호칭 비교용 원문은 따로 쓴다."""
-    text = _norm(raw).removesuffix("님")
-    title = None
-    for t in TITLES + POSITIONS:
-        if text.endswith(t) and len(text) > len(t):
-            text, title = text[: -len(t)], t
-            break
-    return text, title
+def _match(emp: dict, base: str) -> bool:
+    """호칭을 뗀 이름 부분이 실명·이름(성 제외)·성과 맞는지. '민준' → 김민준 2명, '박' → 박씨 전원."""
+    if base == emp["name"] or (len(base) >= 2 and base in given_names(emp["name"])):
+        return True
+    return base in surnames(emp["name"]) and len(base) < len(emp["name"])  # "박 선임", "황보 책임"
 
 
 def _same_name_ids(name: str) -> list[str]:
@@ -39,7 +40,7 @@ def _same_name_ids(name: str) -> list[str]:
 def find_employee(name: str, title: str | None = None, team: str | None = None) -> dict:
     """이름이나 호칭으로 직원을 찾는다.
 
-    name: 실명("김민준"), 실명+직급("이서연 책임"), 호칭("민준님", "박 선임") 모두 가능.
+    name: 실명("김민준"), 실명+직급("이서연 책임"), 호칭("민준님", "민준 프로", "박 선임", "하린씨") 모두 가능.
     title: 직급(수석/책임/선임/사원) 또는 "팀장". 동명이인을 줄일 때 사용.
     team: 팀 이름 일부("플랫폼", "QA"). 동명이인을 줄일 때 사용.
     결과가 여러 명이면 후보를 모두 돌려주므로, 하나로 정하지 말고 사용자 확인을 받는다.
@@ -54,14 +55,14 @@ def find_employee(name: str, title: str | None = None, team: str | None = None) 
     if len(raw) < 2:
         return {"query": name, "matches": [], "note": "이름이나 호칭을 2글자 이상 입력해야 합니다."}
 
-    base, parsed_title = _parse_name(name)
+    base, parsed_title = split_honorific(name)
     title = title or parsed_title
 
-    matches = []
-    for emp in employees():
-        aliases = {_norm(a) for a in emp.get("aliases", [])}
-        if raw in aliases or emp["name"] == base or (base and base in aliases):
-            matches.append(emp)
+    # 1) 조직도에 등록된 호칭과 정확히 같으면 그 사람 ("민준님" → E006)
+    matches = [e for e in employees() if raw in {_norm(a) for a in e.get("aliases", [])}]
+    # 2) 아니면 호칭을 뗀 이름 부분으로 찾는다 ("민준 프로" → 김민준 2명)
+    if not matches and base:
+        matches = [e for e in employees() if _match(e, base)]
 
     if title and len(matches) > 1:
         narrowed = [e for e in matches if title in (e["title"], e["position"])]

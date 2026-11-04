@@ -38,6 +38,48 @@ def get_employee(emp_id: str) -> dict | None:
     return next((e for e in employees() if e["id"] == emp_id), None)
 
 
+# ── 호칭 ──────────────────────────────────────────────
+# 사내에서 부르는 방식이 다양하다: "민준님", "민준 프로", "김 책임", "서연 책임님", "하린씨"
+RANK_TITLES = ("수석", "책임", "선임", "사원")
+POSITION_TITLES = ("팀장",)
+GENERIC_HONORIFICS = ("매니저", "프로", "선배", "님", "씨")  # 직급 정보가 없는 호칭
+COMPOUND_SURNAMES = ("황보", "남궁", "선우", "제갈", "독고")
+
+
+def split_honorific(raw: str) -> tuple[str, str | None]:
+    """호칭을 떼어 (이름 부분, 직급·직책)을 돌려준다. '서연 책임님' → ('서연', '책임'), '민준 프로' → ('민준', None)."""
+    text = "".join((raw or "").split())
+    title = None
+    suffixes = sorted(GENERIC_HONORIFICS + RANK_TITLES + POSITION_TITLES, key=len, reverse=True)
+    changed = True
+    while changed:
+        changed = False
+        for suf in suffixes:
+            if text.endswith(suf) and len(text) > len(suf):
+                text = text[: -len(suf)]
+                if title is None and suf in RANK_TITLES + POSITION_TITLES:
+                    title = suf
+                changed = True
+                break
+    return text, title
+
+
+def given_names(full: str) -> set[str]:
+    """성을 뺀 이름. '김민준' → {'민준'}. 복성처럼 보이면 두 가지로 읽는다: '황보석' → {'보석', '석'}."""
+    names = {full[1:]}
+    if full[:2] in COMPOUND_SURNAMES and len(full) > 2:
+        names.add(full[2:])
+    return names
+
+
+def surnames(full: str) -> set[str]:
+    """'황보석' → {'황', '황보'}."""
+    names = {full[:1]}
+    if full[:2] in COMPOUND_SURNAMES and len(full) > 2:
+        names.add(full[:2])
+    return names
+
+
 def load_seed(name: str) -> dict:
     return json.loads((SEED_DIR / name).read_text(encoding="utf-8"))
 

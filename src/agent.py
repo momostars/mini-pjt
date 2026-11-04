@@ -1,15 +1,23 @@
-"""메인 그래프: Router → Planner → Supervisor ↔ 작업 Agent → HITL → Executor → 보고서 (README 3.1절).
+"""메인 그래프 (README 3.1절).
+
+입력 가드레일 → Router → Planner → Supervisor ↔ 작업 Agent → 출력 검증 → HITL 검토(수정) → Executor → 보고서
 
 그래프 실행에는 config["configurable"]에 thread_id와 toolbox(open_toolbox())가 필요하다.
 """
+
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 
 from src.nodes.context import gather_context
+from src.nodes.edit import confirm_edit, edit
 from src.nodes.executor import execute
 from src.nodes.extractor import extract
+from src.nodes.guard import guard_input, validate
 from src.nodes.planner import plan
 from src.nodes.report import report
 from src.nodes.resolver import resolve
@@ -23,12 +31,15 @@ WORKERS = {
     "extractor": extract,
     "context": gather_context,
     "resolver": resolve,
+    "validate": validate,
     "scheduler": schedule,
     "review": review,
+    "edit": edit,
+    "confirm_edit": confirm_edit,
     "executor": execute,
 }
 
-RECURSION_LIMIT = 40  # Supervisor 무한 루프 방지 (README 9장)
+RECURSION_LIMIT = 60  # Supervisor 무한 루프 방지 (README 9장). 수정 반복을 고려해 여유를 둠
 
 # 체크포인트에서 복원을 허용할 상태 타입 (등록하지 않은 타입은 향후 차단됨)
 STATE_TYPES = [("src.state", name) for name in ("ActionItem", "Decision", "OpenIssue", "EventDraft")]
@@ -38,12 +49,17 @@ def serializer() -> JsonPlusSerializer:
     return JsonPlusSerializer(allowed_msgpack_modules=STATE_TYPES)
 
 
+def _after_guard(state: dict) -> str:
+    return "report" if state.get("blocked") else "router"
+
+
 def _after_router(state: dict) -> str:
     return "planner" if state["intent"] in ("minutes", "schedule", "conflict_check") else "report"
 
 
 def build_graph(checkpointer=None):
     g = StateGraph(MeetingState)
+    g.add_node("guard_input", guard_input)
     g.add_node("router", route)
     g.add_node("planner", plan)
     g.add_node("supervisor", supervise)
@@ -52,12 +68,25 @@ def build_graph(checkpointer=None):
         g.add_node(name, fn)
         g.add_edge(name, "supervisor")
 
-    g.add_edge(START, "router")
+    g.add_edge(START, "guard_input")
+    g.add_conditional_edges("guard_input", _after_guard, ["router", "report"])
     g.add_conditional_edges("router", _after_router, ["planner", "report"])
     g.add_edge("planner", "supervisor")
     g.add_conditional_edges("supervisor", lambda s: s["next_agent"], [*WORKERS, "report"])
     g.add_edge("report", END)
     return g.compile(checkpointer=checkpointer or InMemorySaver(serde=serializer()))
+
+
+@asynccontextmanager
+async def sqlite_checkpointer(path: str | None = None):
+    """중단된 실행(검토 대기)을 프로그램을 다시 켜도 이어갈 수 있게 SQLite에 저장한다."""
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    path = path or os.getenv("CHECKPOINT_DB", "./.state/checkpoints.sqlite")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(path) as saver:
+        saver.serde = serializer()
+        yield saver
 
 
 def run_config(thread_id: str, toolbox, callbacks: list | None = None) -> dict:

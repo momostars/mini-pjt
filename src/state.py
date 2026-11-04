@@ -24,6 +24,7 @@ class ActionItem(BaseModel):
     confidence: float
     warnings: list[str] = Field(default_factory=list)    # 검토 표에 보일 경고 (동명이인, 휴가 충돌, 중복 등)
     notes: list[str] = Field(default_factory=list)       # 참고 정보 (기한 계산 근거 등). 확인 요청은 아님
+    excluded: bool = False                               # 사용자가 HITL에서 제외한 항목
 
 
 class EventDraft(BaseModel):
@@ -75,6 +76,18 @@ class MeetingState(TypedDict, total=False):
     event: EventDraft | None
     related_context: list[dict]                          # 검색된 과거 회의록 청크 (source, date, section, content)
     review_status: Literal["pending", "approved", "edited", "rejected"]
+    review_notice: str | None                            # 검토 표에 다시 보여 줄 안내 (수정 반영 결과 등)
+    edit_request: str                                    # 자연어 수정 요청
+    pending_edits: list[dict] | None                     # 확인 대기 중인 수정 {item_id, field, value, display}
+    edit_problems: list[str]
+    edits_applied: list[dict]                            # 반영된 수정 (장기 기억 학습용, M6)
+    bulk_confirmed: bool                                 # MAX_BULK건 이상 등록을 따로 승인했는지
+    guard_notes: list[str]                               # 입력 가드레일 안내 (마스킹, 주입 탐지, 우회 요청)
+    injection_detected: bool
+    blocked: bool                                        # 입력 가드레일에서 차단 (길이 초과 등)
+    validation_errors: list[str]                         # 출력 검증 오류
+    retries: int                                         # 출력 검증 실패로 재실행한 횟수
+    required: dict[str, int]                             # 단계별 필요한 실행 횟수 (재실행·재검토 시 증가)
     registered: list[str]                                # 등록·변경된 task / event ID
     failed: list[str]                                    # 등록 실패 항목과 이유
     report: str                                          # 최종 요약 보고서

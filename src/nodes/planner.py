@@ -6,7 +6,7 @@
 from src.nodes.common import detect_meeting_date
 
 PLANS = {
-    "minutes": ["extractor", "context", "resolver", "review", "executor", "report"],
+    "minutes": ["extractor", "context", "resolver", "validate", "review", "executor", "report"],
     "conflict_check": ["extractor", "context", "report"],
     "schedule": ["scheduler", "review", "executor", "report"],
 }
@@ -15,4 +15,4 @@ PLANS = {
 def plan(state: dict) -> dict:
     meta = dict(state.get("meeting_meta") or {})
     meta["date"] = detect_meeting_date(state.get("masked_minutes", ""))
-    return {"plan": PLANS[state["intent"]], "meeting_meta": meta, "done": []}
+    return {"plan": PLANS[state["intent"]], "meeting_meta": meta}

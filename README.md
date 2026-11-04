@@ -63,17 +63,22 @@ flowchart TD
     S -->|추출| E[Extractor Agent<br/>결정 사항 · 할 일 추출]
     S -->|맥락| R[Context Agent<br/>과거 회의록 RAG]
     S -->|정리| V[Resolver Agent<br/>담당자 · 마감일 확정]
+    S -->|검증| G2[출력 가드레일<br/>근거 · 형식 검증]
     E --> S
     R --> S
     V --> S
+    G2 -->|실패 시 LLM이 재실행 노드 선택| S
     S -->|검토 준비 완료| H[HITL 검토<br/>interrupt]
-    H -->|수정| S
-    H -->|취소| END1[종료]
+    H -->|수정| ED[수정 해석 → 확인 interrupt]
+    ED -->|반영 후 다시 검토| H
+    H -->|취소| OUT
     H -->|승인| X[Executor Agent<br/>업무·캘린더 등록]
-    X --> G2[출력 가드레일<br/>근거 · 형식 검증]
-    G2 --> M[장기 기억 갱신]
-    M --> OUT[요약 보고서]
+    X --> M[장기 기억 갱신]
+    M --> OUT[요약 보고서<br/>PII 재검사]
 ```
+
+- 실제 그래프는 모든 작업 노드가 Supervisor로 돌아오는 구조이고, 위 화살표는 Supervisor가 고르는 순서를 나타냅니다
+- 입력 가드레일에서 차단(길이 초과)되면 바로 요약 보고서로 갑니다
 
 ### 3.2 Agent 역할 (Supervisor 패턴, Day6)
 
@@ -107,6 +112,7 @@ class ActionItem(BaseModel):
     confidence: float
     warnings: list[str]            # 검토 표의 경고 (동명이인, 휴가 충돌, 중복, 기한 모호 등). 있으면 확인 필요
     notes: list[str]               # 참고 정보 (기한 계산 근거 회의록 등)
+    excluded: bool                 # 사용자가 HITL에서 제외한 항목
 
 class EventDraft(BaseModel):       # 일정 등록 요청 (intent=schedule)
     title: str
@@ -153,6 +159,8 @@ class MeetingState(TypedDict):
     failed: list[str]              # 등록 실패 항목과 이유
     report: str                    # 최종 요약 보고서
     next_agent: str
+    # M5: 가드레일·HITL 수정 (guard_notes, validation_errors, retries, required, edit_request,
+    #     pending_edits, edits_applied, bulk_confirmed 등) — 전체는 src/state.py 참고
 ```
 
 - 체크포인트에서 Pydantic 상태 타입을 복원할 수 있도록 `allowed_msgpack_modules`에 등록합니다 (`src/agent.py`)
@@ -185,6 +193,12 @@ class MeetingState(TypedDict):
 | `calendar-server` | `create_event(title, start, end, attendees)`, `check_availability(user_id, date, end_date?)` | `data/calendar.db` |
 
 - 응답에 이메일을 넣지 않고, 이름이나 팀 없이 조직도를 조회할 수 없습니다 (조직도 대량 출력 방지)
+- **호칭 처리** (`find_employee`): 사내 호칭은 "민준님", "민준 프로", "김 책임", "서연 책임님", "하린씨"처럼 다양합니다
+  - 떼어 내는 호칭: 님, 씨, 프로, 매니저, 선배(직급 정보 없음) / 수석, 책임, 선임, 사원, 팀장(동명이인을 좁히는 데 사용)
+  - 조직도 `aliases`에 등록된 호칭과 정확히 같으면 그 사람으로 찾습니다 ("민준님" → E006)
+  - 아니면 호칭을 뗀 이름 부분을 실명·이름(성 제외)·성과 비교합니다. "민준 프로"는 김민준 2명이 후보가 되고, Resolver가 맥락(맡은 업무)으로 고르거나 사용자에게 묻습니다
+  - 복성으로 보이는 이름은 두 가지로 읽습니다 ("황보석" → "보석 프로", "황보 책임" 모두 찾음)
+  - 입력 가드레일의 외부인 판정도 같은 규칙으로 호칭을 떼고 비교해, 직원을 외부인으로 가리지 않습니다
 - `create_task`는 휴직자에게 배정하면 거부합니다. 삭제·완료 처리 도구는 두지 않습니다
 - `find_duplicate_task`는 글자 bigram 유사도로 **후보만** 찾습니다. 실제 중복인지는 Context Agent가 판단하고 HITL에서 확인합니다
 - `resolve_date`, `search_past_meetings`는 MCP가 아닌 로컬 도구입니다 (`src/tools.py`)
@@ -195,28 +209,38 @@ class MeetingState(TypedDict):
 
 ### 4.4 Human-in-the-Loop — Day5
 - `interrupt()`로 등록 직전에 멈추고 사용자에게 검토 표를 보여줍니다
-- 사용자 응답: `approve` / 수정 / `reject`
+- 사용자 응답: `approve` / 수정 / `reject` (빈 응답은 거절로 보지 않고 다시 묻습니다)
   - 수정은 자연어로 받습니다 ("2번 담당자는 박지훈으로"). LLM이 `{id, field, value}`로 바꾸고, 바꾼 결과를 다시 보여 주어 확인받은 뒤 반영합니다
+  - 수정 가능한 필드: 담당자, 기한, 제목, 제외/제외 취소, 중복 의심이어도 신규 등록. 담당자는 `find_employee`로 1명으로 확정될 때만, 기한은 `resolve_date`로 날짜가 나올 때만 받아들입니다
+  - 수정 해석(LLM)과 확인(interrupt)은 노드를 나눴습니다. 재개하면 노드가 처음부터 다시 실행되므로, 같은 노드에 두면 LLM이 다시 호출되기 때문입니다
+  - 반영한 수정은 `edits_applied`에 남겨 장기 기억 학습(4.6)에 씁니다
 - **반드시 확인을 받는 경우**: 담당자 후보가 2명 이상, 신뢰도 0.7 미만, 중복 의심, 마감일이 지났거나 빠지거나 모호함, 담당자 휴가와 기한 충돌
 - **승인 시 처리 규칙**
   - 담당자가 확정되지 않은 항목은 등록하지 않고 보고서의 "미확정 항목"에 남깁니다
   - 기한이 없는 항목은 기한을 비워 둔 채 등록합니다. 기한을 임의로 채우지 않습니다
   - 중복 의심 항목은 신규 등록하지 않습니다. 기존 업무와 기한이 다르면 `update_task`로 기한을 바꿉니다. 사용자가 수정으로 요청하면 신규 등록합니다
-- 체크포인터(`SqliteSaver`)로 중단된 지점부터 다시 시작
+- 등록·변경이 20건 이상이면 `approve`로는 등록하지 않고 `approve all`을 따로 받습니다
+- 체크포인터(`AsyncSqliteSaver`, `CHECKPOINT_DB`)로 중단된 지점부터 다시 시작합니다: `python -m src.cli --thread <thread_id>`
 
 ### 4.5 가드레일 — Day5
 | 구분 | 검사 | 처리 |
 |---|---|---|
-| 입력 | 주민번호, 전화번호, 계좌, 이메일 등 PII | 정규식으로 찾아 마스킹 후 진행 |
-| 입력 | 외부인 이름 | 조직도에 없는 사람 이름을 LLM으로 찾아 마스킹 (조직도 직원 이름은 유지) |
-| 입력 | 범위 밖 요청, 조직도 대량 조회, 연봉·평가 등 인사 정보 요청 | Router에서 거절 안내 |
-| 입력 | 회의록 안의 프롬프트 주입 ("이전 지시를 무시하고…") | 탐지 후 해당 문장은 데이터로만 취급 |
-| 입력 | 길이 초과, 회의록이 아닌 입력 | 거절 또는 분할 |
-| 출력 | 근거 문장이 원문에 없음 | 해당 항목 제거 또는 재추출 |
-| 출력 | 날짜와 담당자 형식 오류 | 검증 실패 시 Resolver 재실행 |
-| 실행 | 등록 건수 이상 (예: 한 번에 20건 이상) | 등록 중단 후 확인 요청 |
+| 입력 | 주민번호, 전화번호, 계좌, 카드, 이메일 등 PII | 정규식으로 찾아 `[전화번호]`처럼 마스킹 후 진행 |
+| 입력 | 외부인 이름 | 조직도에 없는 사람 이름을 LLM으로 찾아 `[외부인]`으로 마스킹 (직원 실명·이름·호칭은 유지) |
+| 입력 | 범위 밖 요청, 업무 삭제·완료, 조직도 대량 조회, 연봉·평가 등 인사 정보 요청 | Router에서 이유별 거절 안내 |
+| 입력 | 회의록 안의 프롬프트 주입 ("이전 지시를 무시하고…", `[SYSTEM]`) | 탐지해 안내하고, 해당 문장은 지우지 않고 데이터로만 취급 |
+| 입력 | "확인 없이 바로 등록" 같은 HITL 우회 요청 | 탐지해 "승인 없이 등록하지 않는다"고 안내, 검토는 그대로 진행 |
+| 입력 | 길이 초과 (20,000자) | 거절하고 나눠서 넣도록 안내 |
+| 출력 | 근거 문장이 원문에 없음 | 해당 항목 제거 |
+| 출력 | 담당자 ID가 없거나 휴직자, 기한이 회의 날짜와 동떨어짐 | 값을 비우고 경고(HITL 확인). Supervisor의 LLM이 재실행할 노드(Extractor/Resolver/없음)를 고름 (최대 1회) |
+| 출력 | 검토 표, 보고서, 도구 인자·결과에 남은 PII | 정규식으로 한 번 더 마스킹 |
+| 실행 | 등록 건수 이상 (한 번에 20건 이상) | 등록 중단 후 `approve all` 확인 요청 |
+| 실행 | 승인 없는 등록 | Executor가 `review_status`를 다시 확인하고 거부 |
 
-미들웨어(Day5-1, 2)로 구현해 모든 LLM·도구 호출 앞뒤에 적용합니다.
+**구현 위치**
+- 입력 가드레일은 그래프의 첫 노드(`src/nodes/guard.py`의 `guard_input`), 출력 검증은 Resolver 뒤의 `validate` 노드입니다
+- 도구 호출 앞뒤의 PII 제거는 `Toolbox.call`에 넣었습니다 (도구 미들웨어). LLM에는 마스킹한 텍스트만 들어갑니다
+- **개인정보 원문은 상태에 저장하지 않습니다.** 체크포인트(SQLite)도 출력물이기 때문입니다. 회의록 파일은 `guard_input` 안에서만 읽고 마스킹본만 상태에 넣습니다. CLI와 평가 러너는 그래프에 넣기 전에 요청 문장의 정규식 PII를 먼저 지웁니다 (외부인 이름은 그래프 안에서 처리하므로, 요청 문장에 직접 쓴 외부인 이름은 첫 체크포인트에 남을 수 있음)
 
 ### 4.6 장기 기억 — Day7
 LangGraph `Store`에 사용자·팀별로 저장합니다.
@@ -415,6 +439,7 @@ mini-pjt_jihyeon_kim/
 │   ├── retriever.py              # [규정] RAG 파이프라인 (회의록 분할·임베딩·인덱싱·검색)
 │   ├── nodes/                    # 작업 Agent 노드
 │   │   ├── common.py             # Toolbox 꺼내기, 회의 날짜 찾기
+│   │   ├── guard.py              # 입력 가드레일, 출력 검증 노드
 │   │   ├── router.py
 │   │   ├── supervisor.py
 │   │   ├── planner.py
@@ -423,6 +448,7 @@ mini-pjt_jihyeon_kim/
 │   │   ├── resolver.py
 │   │   ├── scheduler.py          # 일정 등록 요청 처리
 │   │   ├── review.py             # HITL 검토 (interrupt)
+│   │   ├── edit.py               # HITL 자연어 수정, 수정 확인
 │   │   ├── executor.py
 │   │   └── report.py             # 요약 보고서
 │   ├── state.py                  # 상태, Pydantic 스키마
@@ -612,7 +638,7 @@ def get_embeddings():
 | **M2** RAG ✅ | 과거 회의록 인덱싱, 검색, 중복 탐지, 검색 평가셋 작성과 Hit@k 측정 | `retriever.py`, `retrieval.jsonl` | Day2 |
 | **M3** MCP 서버 ✅ | 조직도, 업무, 캘린더 서버 3개 + 도구 로딩 | `mcp_servers/`, `tools.py` | Day4 |
 | **M4** 그래프 조립 ✅ | Supervisor + 작업 Agent 연결, 조건부 분기 | `agent.py`, `nodes/` | Day3, Day6 |
-| **M5** 안전장치 | HITL interrupt, 입력·출력 가드레일 미들웨어 | `guardrails.py` | Day5 |
+| **M5** 안전장치 ✅ | HITL interrupt, 입력·출력 가드레일 미들웨어 | `guardrails.py` | Day5 |
 | **M6** 기억과 관측 | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
 | **M7** 1차 자체 평가 | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |
 | **M8** 개선·2차 자체 평가 | 1차 실패 케이스 개선 후 재평가 | `round2_report.md` | Day 10 |
