@@ -14,7 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from src.llm import get_llm
-from src.nodes.common import employee_label, toolbox
+from src.nodes.common import employee_label, narrow_by_attendance, parse_attendance, toolbox
 from src.state import ActionItem
 from src.tools import ToolCallError, _calendar
 
@@ -45,6 +45,8 @@ SYSTEM = """할 일의 담당자 후보와 기한 표현을 정리합니다. 회
 - 후보가 여럿이면 회의록 맥락(소속, 맡은 업무, 회의 내용)으로 확실할 때만 고릅니다.
   예: "이서연 책임"이 대시보드를 말하고 있고 후보가 프론트엔드팀 이서연 책임과 플랫폼개발팀 이서연 선임이면 프론트엔드팀.
 - "QA 쪽", "인프라팀"처럼 팀 단위로만 적힌 담당자는 고르지 않습니다(null). 사용자가 정합니다.
+- 참석·불참 명단은 판단을 돕는 근거일 뿐입니다. 불참자도 다른 사람이 전달한 일의 담당자가 될 수 있고,
+  참석자라는 이유만으로 고르지 않습니다. 맡은 업무와 회의 맥락을 함께 봅니다.
 - 추측하지 않습니다. 확신이 없으면 null.
 
 ## 기한 표현
@@ -64,11 +66,52 @@ HUMAN = """회의 날짜: {meeting_date}
 {minutes}
 </minutes>
 
+## 참석·불참 (조직도 기준, 판단을 돕는 근거)
+{attendance}
+
 ## 과거 회의록 참고 자료
 {related}
 
 ## 할 일과 담당자 후보
 {items}"""
+
+
+class Attendance:
+    """참석·불참 명단을 조직도로 해석한 결과. 담당자 판단을 돕는 근거로만 쓴다."""
+
+    def __init__(self, present: list[tuple[str, list[dict]]], absent: list[tuple[str, list[dict]]]):
+        self.present, self.absent = present, absent
+        self.present_groups = [[m["id"] for m in ms] for _, ms in present if ms]
+        self.absent_ids = {ms[0]["id"] for _, ms in absent if len(ms) == 1}
+
+    def describe(self) -> str:
+        if not self.present and not self.absent:
+            return "(회의록에 참석자 명단 없음)"
+
+        def fmt(raw, ms):
+            if len(ms) == 1:
+                return f"{raw} → {employee_label(ms[0])}"
+            if ms:
+                return f"{raw} → 누군지 모름({', '.join(employee_label(m) for m in ms)} 중)"
+            return f"{raw} → 조직도에 없음"
+
+        lines = [f"- 참석: {fmt(r, ms)}" for r, ms in self.present]
+        lines += [f"- 불참: {fmt(r, ms)}" for r, ms in self.absent]
+        return "\n".join(lines)
+
+
+async def _attendance(tb, minutes: str, config) -> Attendance:
+    """'참석:'·'불참:' 줄의 이름을 find_employee로 해석한다 ("이서연(플랫폼)"의 소속 표기도 쓴다)."""
+    present, absent = parse_attendance(minutes)
+
+    async def lookup(raw: str) -> tuple[str, list[dict]]:
+        try:
+            return raw, (await tb.call("find_employee", {"name": raw}, config)).get("matches", [])
+        except ToolCallError:
+            return raw, []
+
+    found = await asyncio.gather(*(lookup(r) for r in present + absent))
+    return Attendance(found[: len(present)], found[len(present):])
 
 
 async def _find_candidates(tb, item: ActionItem, config) -> tuple[list[dict], bool]:
@@ -104,6 +147,7 @@ async def resolve(state: dict, config: RunnableConfig) -> dict:
     # 1. 담당자 후보
     found = await asyncio.gather(*(_find_candidates(tb, a, config) for a in items))
     cand_map = {a.id: f for a, f in zip(items, found)}
+    attendance = await _attendance(tb, state.get("masked_minutes", ""), config)
 
     # 2. LLM 판단 (후보 선택, 기한 표현 정리)
     milestones = "\n".join(f"- {m['date']} {m['title']}" for m in _calendar()["milestones"])
@@ -124,6 +168,7 @@ async def resolve(state: dict, config: RunnableConfig) -> dict:
             "meeting_date": meeting_date or "알 수 없음",
             "minutes": state.get("masked_minutes", ""),
             "related": related,
+            "attendance": attendance.describe(),
             "items": items_text,
         },
         config=config,
@@ -132,7 +177,7 @@ async def resolve(state: dict, config: RunnableConfig) -> dict:
 
     # 3. 확정 + 날짜 계산 + 가용성·기존 업무 확인
     await asyncio.gather(*(
-        _finalize(tb, a, *cand_map[a.id], decisions.get(a.id), meeting_date, config) for a in items
+        _finalize(tb, a, *cand_map[a.id], decisions.get(a.id), meeting_date, attendance, config) for a in items
     ))
     return {"action_items": items, "done": ["resolver"]}
 
@@ -153,14 +198,19 @@ async def _add_milestone_basis(tb, item: ActionItem, milestone: dict, meeting_da
 
 
 async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
-                    decision: ItemDecision | None, meeting_date: str | None, config) -> None:
+                    decision: ItemDecision | None, meeting_date: str | None, attendance: "Attendance",
+                    config) -> None:
     active = [c for c in cands if c["status"] != "on_leave"]
     item.assignee_candidates = [c["id"] for c in active]
 
-    # 담당자
-    chosen = None
+    # 담당자: 후보 1명 → 그 사람 / 참석자 명단으로 분명히 가려지면 그 사람 / 아니면 LLM 판단
+    chosen, by_attendance = None, False
     if len(cands) == 1 and not team_level:
         chosen = cands[0]
+    elif len(cands) > 1 and not team_level and (
+        picked := narrow_by_attendance([c["id"] for c in cands], attendance.present_groups)
+    ):
+        chosen, by_attendance = next(c for c in cands if c["id"] == picked), True
     elif decision and decision.assignee_id and not team_level:
         chosen = next((c for c in cands if c["id"] == decision.assignee_id), None)
 
@@ -184,9 +234,19 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
         item.assignee_id = chosen["id"]
         item.assignee_candidates = [chosen["id"]]
         if chosen.get("same_name_ids"):
-            item.warnings.append(f"동명이인 있음({', '.join(chosen['same_name_ids'])}) → {employee_label(chosen)}로 판단")
+            basis = "참석자 명단으로" if by_attendance else ("호칭·직급으로" if len(cands) == 1 else "맥락으로")
+            item.warnings.append(
+                f"동명이인 있음({', '.join(chosen['same_name_ids'])}) → {basis} {employee_label(chosen)}로 판단"
+            )
+        elif by_attendance:
+            item.notes.append(f"후보 {len(cands)}명 중 참석자 명단으로 {employee_label(chosen)}로 판단")
+        if chosen["id"] in attendance.absent_ids:
+            item.warnings.append(f"{employee_label(chosen)}은 이번 회의 불참자 → 담당이 맞는지 확인 필요")
     elif team_level:
         item.warnings.append(f"담당자가 팀 단위('{item.assignee_raw}') → 후보 {len(active)}명 중 지정 필요")
+        attending = [c for c in active if [c["id"]] in attendance.present_groups]
+        if attending:
+            item.notes.append("회의 참석 팀원: " + ", ".join(employee_label(c) for c in attending))
     else:
         item.warnings.append(f"담당자 후보 {len(active)}명 ({', '.join(employee_label(c) for c in active)}) → 지정 필요")
 

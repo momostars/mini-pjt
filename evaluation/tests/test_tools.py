@@ -109,6 +109,49 @@ def test_honorific_variants(query, expected):
     assert ids(find_employee(query)) == expected
 
 
+# ── 참석자 명단: 판단을 돕는 근거 ──────────────────────────
+
+
+def _groups(sample: str) -> tuple[list[list[str]], set[str]]:
+    from pathlib import Path
+
+    from src.nodes.common import parse_attendance
+
+    present, absent = parse_attendance(Path("data/samples", sample).read_text(encoding="utf-8"))
+    groups = [ids(find_employee(r)) for r in present]
+    absent_ids = {g[0] for g in (ids(find_employee(r)) for r in absent) if len(g) == 1}
+    return [g for g in groups if g], absent_ids
+
+
+def test_attendance_narrows_when_clear():
+    from src.nodes.common import narrow_by_attendance
+
+    groups, _ = _groups("20261105_incident_retro.md")  # "김민준(플랫폼)", "이서연(플랫폼)"
+    assert narrow_by_attendance(["E006", "E018"], groups) == "E006"
+    assert narrow_by_attendance(["E007", "E013"], groups) == "E007"
+
+
+def test_attendance_does_not_narrow_when_both_attended():
+    from src.nodes.common import narrow_by_attendance
+
+    groups, _ = _groups("20261102_weekly.md")  # 김민준, 이서연이 두 번씩 (동명이인 둘 다 참석)
+    assert narrow_by_attendance(["E006", "E018"], groups) is None
+    assert narrow_by_attendance(["E007", "E013"], groups) is None
+
+
+def test_attendance_absent_list():
+    groups, absent = _groups("20261109_weekly.md")  # 불참: 김민준 책임(휴가)
+    assert absent == {"E006"}
+    assert ["E030"] not in groups  # 백승우는 명단에 없지만(전달받은 일) 담당 후보에서 빼지 않는다
+
+
+def test_no_attendance_line_in_memo():
+    from src.nodes.common import narrow_by_attendance, parse_attendance
+
+    assert parse_attendance("11/2 회의 메모: 민준 프로가 ...") == ([], [])
+    assert narrow_by_attendance(["E006", "E018"], []) is None
+
+
 def test_park_seonim_is_ambiguous():
     r = find_employee("박 선임")
     assert ids(r) == ["E008", "E019"]
