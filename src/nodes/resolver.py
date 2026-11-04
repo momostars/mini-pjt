@@ -7,16 +7,18 @@
 """
 
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
+from langgraph.store.base import BaseStore
 from pydantic import BaseModel, Field
 
 from src.llm import get_llm
+from src.memory import get_alias, get_prefs
 from src.nodes.common import employee_label, narrow_by_attendance, parse_attendance, toolbox
 from src.state import ActionItem
-from src.tools import ToolCallError, _calendar
+from src.tools import ToolCallError, _calendar, to_business_day
 
 CONFIDENCE_REVIEW = 0.7
 
@@ -136,7 +138,7 @@ def _format_candidates(cands: list[dict], team_level: bool) -> str:
     )
 
 
-async def resolve(state: dict, config: RunnableConfig) -> dict:
+async def resolve(state: dict, config: RunnableConfig, *, store: BaseStore | None = None) -> dict:
     tb = toolbox(config)
     meta = state.get("meeting_meta") or {}
     meeting_date = meta.get("date")
@@ -148,6 +150,8 @@ async def resolve(state: dict, config: RunnableConfig) -> dict:
     found = await asyncio.gather(*(_find_candidates(tb, a, config) for a in items))
     cand_map = {a.id: f for a, f in zip(items, found)}
     attendance = await _attendance(tb, state.get("masked_minutes", ""), config)
+    learned = {a.id: await get_alias(store, config, a.assignee_raw) for a in items}  # 장기 기억: 호칭 학습
+    prefs = await get_prefs(store, config)
 
     # 2. LLM 판단 (후보 선택, 기한 표현 정리)
     milestones = "\n".join(f"- {m['date']} {m['title']}" for m in _calendar()["milestones"])
@@ -177,7 +181,9 @@ async def resolve(state: dict, config: RunnableConfig) -> dict:
 
     # 3. 확정 + 날짜 계산 + 가용성·기존 업무 확인
     await asyncio.gather(*(
-        _finalize(tb, a, *cand_map[a.id], decisions.get(a.id), meeting_date, attendance, config) for a in items
+        _finalize(tb, a, *cand_map[a.id], decisions.get(a.id), meeting_date, attendance,
+                  learned.get(a.id), prefs, config)
+        for a in items
     ))
     return {"action_items": items, "done": ["resolver"]}
 
@@ -199,18 +205,25 @@ async def _add_milestone_basis(tb, item: ActionItem, milestone: dict, meeting_da
 
 async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
                     decision: ItemDecision | None, meeting_date: str | None, attendance: "Attendance",
-                    config) -> None:
+                    learned: dict | None, prefs: dict, config) -> None:
     active = [c for c in cands if c["status"] != "on_leave"]
     item.assignee_candidates = [c["id"] for c in active]
 
-    # 담당자: 후보 1명 → 그 사람 / 참석자 명단으로 분명히 가려지면 그 사람 / 아니면 LLM 판단
-    chosen, by_attendance = None, False
+    # 담당자: 후보 1명 → 그 사람 / 참석자 명단으로 분명히 가려지면 그 사람
+    #         / 사용자가 이전에 고친 호칭(장기 기억) / LLM 판단. 학습·명단은 판단을 돕는 근거라 경고를 붙인다
+    chosen, by_attendance, by_memory = None, False, False
+    learned_cand = next((c for c in active if learned and c["id"] == learned["employee_id"]), None)
     if len(cands) == 1 and not team_level:
         chosen = cands[0]
     elif len(cands) > 1 and not team_level and (
         picked := narrow_by_attendance([c["id"] for c in cands], attendance.present_groups)
     ):
         chosen, by_attendance = next(c for c in cands if c["id"] == picked), True
+    elif learned_cand:
+        chosen, by_memory = learned_cand, True
+        item.warnings.append(
+            f"이전 수정 기록('{item.assignee_raw}' → {learned['label']}, {learned['count']}회)으로 판단 → 확인 필요"
+        )
     elif decision and decision.assignee_id and not team_level:
         chosen = next((c for c in cands if c["id"] == decision.assignee_id), None)
 
@@ -233,7 +246,7 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
     elif chosen:
         item.assignee_id = chosen["id"]
         item.assignee_candidates = [chosen["id"]]
-        if chosen.get("same_name_ids"):
+        if chosen.get("same_name_ids") and not by_memory:
             basis = "참석자 명단으로" if by_attendance else ("호칭·직급으로" if len(cands) == 1 else "맥락으로")
             item.warnings.append(
                 f"동명이인 있음({', '.join(chosen['same_name_ids'])}) → {basis} {employee_label(chosen)}로 판단"
@@ -242,7 +255,7 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
             item.notes.append(f"후보 {len(cands)}명 중 참석자 명단으로 {employee_label(chosen)}로 판단")
         if chosen["id"] in attendance.absent_ids:
             item.warnings.append(f"{employee_label(chosen)}은 이번 회의 불참자 → 담당이 맞는지 확인 필요")
-    elif team_level:
+    elif team_level:  # (이전 수정 기록이 있으면 위에서 이미 골랐다)
         item.warnings.append(f"담당자가 팀 단위('{item.assignee_raw}') → 후보 {len(active)}명 중 지정 필요")
         attending = [c for c in active if [c["id"]] in attendance.present_groups]
         if attending:
@@ -271,6 +284,10 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
             item.notes.append(f"기한 시각: {item.due_date} {r['note']}")
         if r.get("milestone") and item.due_date:
             await _add_milestone_basis(tb, item, r["milestone"], meeting_date, config)
+    elif prefs.get("default_due_days"):  # 사용자 기본 설정: 기한이 없을 때 제안할 기간
+        days = int(prefs["default_due_days"])
+        item.due_date = to_business_day(date.fromisoformat(meeting_date) + timedelta(days=days))
+        item.warnings.append(f"기한 미정 → 기본 설정({days}일)으로 {item.due_date} 제안, 확인 필요")
     else:
         item.warnings.append("기한 미정 → 기한 확인 필요 (승인하면 기한을 비워 두고 등록)")
 

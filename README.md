@@ -248,10 +248,19 @@ class MeetingState(TypedDict):
 - **개인정보 원문은 상태에 저장하지 않습니다.** 체크포인트(SQLite)도 출력물이기 때문입니다. 회의록 파일은 `guard_input` 안에서만 읽고 마스킹본만 상태에 넣습니다. CLI와 평가 러너는 그래프에 넣기 전에 요청 문장의 정규식 PII를 먼저 지웁니다 (외부인 이름은 그래프 안에서 처리하므로, 요청 문장에 직접 쓴 외부인 이름은 첫 체크포인트에 남을 수 있음)
 
 ### 4.6 장기 기억 — Day7
-LangGraph `Store`에 사용자·팀별로 저장합니다.
-- **호칭 매핑**: "QA 쪽" → 박OO (사용자가 HITL에서 수정한 내용을 학습)
-- **기본 설정**: 마감일이 없을 때 기본 기간, 선호하는 등록 대상(업무 도구만 또는 캘린더도)
-- **팀 정보**: 정기 회의명, 자주 나오는 프로젝트 약어
+LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI는 `AsyncSqliteStore`로 `MEMORY_DB`에 저장).
+
+| 이름공간 | 내용 | 쓰는 곳 |
+|---|---|---|
+| `("aliases", user_id)` | **호칭 매핑**: "QA 쪽" → 박소율 (HITL에서 담당자를 고치면 학습, 같은 사람으로 고친 횟수 기록) | Resolver: 후보 중 학습한 사람이 있으면 그 사람으로 판단 |
+| `("prefs", user_id)` | **기본 설정**: `default_due_days` (기한이 없을 때 제안할 기간) | Resolver: 회의 날짜 + N일(근무일로 조정)을 제안 |
+| `("team", team_id)` | **팀 정보**: 용어집 (프로젝트 약어 등) | Planner가 읽어 Extractor 프롬프트에 참고 자료로 넣음 |
+
+- 학습한 값은 **판단을 돕는 근거**로만 씁니다. 그 값으로 정한 항목에는 "이전 수정 기록으로 판단 → 확인 필요" 경고를 붙여 HITL에서 확인받습니다. 판단 우선순위: 후보 1명 > 참석자 명단 > 이전 수정 기록 > LLM 맥락 판단
+- 기본 기한도 제안일 뿐이라 경고를 붙입니다 (4.4절 "기한을 임의로 채우지 않는다"는 원칙 유지)
+- 그래프 마지막 단계의 `memory` 노드가 반영된 수정(`edits_applied`)을 저장합니다. 승인·거절과 관계없이 사용자가 확인한 수정이면 저장합니다
+- **평가 러너는 케이스마다 빈 `InMemoryStore`를 씁니다.** 앞 케이스의 학습이 뒤 케이스 판정에 섞이지 않게 하기 위해서입니다
+- 관리: `python -m src.memory list | set-pref default_due_days 7 | set-term SOP2 "스마트오피스 포털 v2" | forget-alias "QA 쪽"`
 
 ### 4.7 관측 — Day4-2, Day7
 외부 추적 서비스(LangSmith 등)는 쓰지 않고, LangChain 콜백(`BaseCallbackHandler`)으로 실행 기록을 로컬 **`trace.jsonl`** 파일에 남깁니다. 계정 없이 동작하고, 평가 러너가 같은 파일에서 도구 호출을 읽어 판정합니다.
@@ -269,6 +278,10 @@ LangGraph `Store`에 사용자·팀별로 저장합니다.
 | `on_chat_model_start` / `on_llm_end` | `llm_start` / `llm_end` | `model`, `latency_ms`, `input_tokens`, `output_tokens` |
 | `on_tool_start` / `on_tool_end` | `tool_start` / `tool_end` | `tool`, `args`, `latency_ms` |
 | `on_chain_error` / `on_llm_error` / `on_tool_error` | `error` | `name`, `error_type`, `message` |
+| `on_chain_error` (`GraphInterrupt`) | `interrupt` | `node` (HITL 검토 대기. 오류가 아니므로 따로 기록 → 평가 러너가 "등록 전 검토 요청" 판정에 사용) |
+
+- 그래프 실행 config는 `run_config(thread_id, toolbox)`로 만들며, 기본으로 `JsonlTraceHandler(trace_id=thread_id)`가 붙습니다
+- 실패한 도구 호출(`error`)은 "호출됨"으로 치지 않습니다. `tools_called()`는 `tool_end`만 셉니다
 
 - 모든 줄의 공통 필드: `ts`, `trace_id`(실행 1건 = 그래프 `thread_id`), `run_id`, `parent_run_id`
 - 노드 이벤트는 LangGraph 노드(메타데이터 `langgraph_node`가 있는 체인)만 남기고, 내부 체인은 건너뜁니다
@@ -455,10 +468,11 @@ mini-pjt_jihyeon_kim/
 │   │   ├── review.py             # HITL 검토 (interrupt)
 │   │   ├── edit.py               # HITL 자연어 수정, 수정 확인
 │   │   ├── executor.py
+│   │   ├── memory_update.py      # 장기 기억 갱신 (HITL 수정 학습)
 │   │   └── report.py             # 요약 보고서
 │   ├── state.py                  # 상태, Pydantic 스키마
 │   ├── guardrails.py             # 입력·출력 가드레일 미들웨어
-│   ├── memory.py                 # 장기 기억 Store
+│   ├── memory.py                 # 장기 기억 Store (호칭 매핑, 기본 설정, 팀 용어집) + 관리 명령
 │   ├── llm.py                    # Bedrock 모델·임베딩 생성
 │   ├── tracing.py                # 콜백 추적 (trace.jsonl 기록·집계)
 │   ├── cli.py                    # 실행 진입점 (HITL 대화)
@@ -644,7 +658,7 @@ def get_embeddings():
 | **M3** MCP 서버 ✅ | 조직도, 업무, 캘린더 서버 3개 + 도구 로딩 | `mcp_servers/`, `tools.py` | Day4 |
 | **M4** 그래프 조립 ✅ | Supervisor + 작업 Agent 연결, 조건부 분기 | `agent.py`, `nodes/` | Day3, Day6 |
 | **M5** 안전장치 ✅ | HITL interrupt, 입력·출력 가드레일 미들웨어 | `guardrails.py` | Day5 |
-| **M6** 기억과 관측 | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
+| **M6** 기억과 관측 ✅ | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
 | **M7** 1차 자체 평가 | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |
 | **M8** 개선·2차 자체 평가 | 1차 실패 케이스 개선 후 재평가 | `round2_report.md` | Day 10 |
 | **M9** 마무리 | 데모 시나리오, (선택) Dockerfile·run.sh·Streamlit, 발표 자료 | 데모 영상 / 발표 자료 | |

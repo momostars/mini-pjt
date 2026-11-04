@@ -19,6 +19,7 @@ from langgraph.types import Command
 
 from src.agent import build_graph, run_config, sqlite_checkpointer
 from src.guardrails import mask_pii
+from src.memory import sqlite_store
 from src.mcp_servers.common import reset_all
 from src.tools import open_toolbox
 
@@ -63,10 +64,10 @@ async def _pending_interrupt(graph, config):
     return snapshot.interrupts[0].value if snapshot.interrupts else None
 
 
-async def run(request: str | None, auto: str | None, thread_id: str) -> dict:
-    async with sqlite_checkpointer() as saver, open_toolbox() as tb:
-        graph = build_graph(saver)
-        config = run_config(thread_id, tb)
+async def run(request: str | None, auto: str | None, thread_id: str, user: str | None = None) -> dict:
+    async with sqlite_checkpointer() as saver, sqlite_store() as store, open_toolbox() as tb:
+        graph = build_graph(saver, store)
+        config = run_config(thread_id, tb, user_id=user)
         print(f"[thread_id: {thread_id}] (중단되면 --thread {thread_id} 로 이어서 진행)")
         try:
             if request is None:
@@ -100,13 +101,14 @@ def main() -> None:
     parser.add_argument("--auto", choices=["approve", "reject"], help="검토 단계에서 자동 응답")
     parser.add_argument("--reset", action="store_true", help="업무·일정 DB를 data/seed로 초기화")
     parser.add_argument("--thread", default=None, help="thread_id (기본: 새로 발급)")
+    parser.add_argument("--user", default=None, help="장기 기억을 구분할 사용자 ID (기본: default)")
     args = parser.parse_args()
 
     if args.request is None and not args.thread:
         parser.error("요청 문장(또는 파일 경로)이나 --thread 중 하나가 필요합니다.")
     if args.reset:
         reset_all()
-    asyncio.run(run(args.request, args.auto, args.thread or uuid.uuid4().hex[:8]))
+    asyncio.run(run(args.request, args.auto, args.thread or uuid.uuid4().hex[:8], args.user))
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from src.nodes.edit import confirm_edit, edit
 from src.nodes.executor import execute
 from src.nodes.extractor import extract
 from src.nodes.guard import guard_input, validate
+from src.nodes.memory_update import update_memory
 from src.nodes.planner import plan
 from src.nodes.report import report
 from src.nodes.resolver import resolve
@@ -37,6 +38,7 @@ WORKERS = {
     "edit": edit,
     "confirm_edit": confirm_edit,
     "executor": execute,
+    "memory": update_memory,
 }
 
 RECURSION_LIMIT = 60  # Supervisor 무한 루프 방지 (README 9장). 수정 반복을 고려해 여유를 둠
@@ -57,7 +59,7 @@ def _after_router(state: dict) -> str:
     return "planner" if state["intent"] in ("minutes", "schedule", "conflict_check") else "report"
 
 
-def build_graph(checkpointer=None):
+def build_graph(checkpointer=None, store=None):
     g = StateGraph(MeetingState)
     g.add_node("guard_input", guard_input)
     g.add_node("router", route)
@@ -74,7 +76,8 @@ def build_graph(checkpointer=None):
     g.add_edge("planner", "supervisor")
     g.add_conditional_edges("supervisor", lambda s: s["next_agent"], [*WORKERS, "report"])
     g.add_edge("report", END)
-    return g.compile(checkpointer=checkpointer or InMemorySaver(serde=serializer()))
+    # store가 없으면 장기 기억 없이 동작한다 (평가 러너는 케이스마다 빈 InMemoryStore를 넘긴다)
+    return g.compile(checkpointer=checkpointer or InMemorySaver(serde=serializer()), store=store)
 
 
 @asynccontextmanager
@@ -89,9 +92,15 @@ async def sqlite_checkpointer(path: str | None = None):
         yield saver
 
 
-def run_config(thread_id: str, toolbox, callbacks: list | None = None) -> dict:
-    return {
-        "configurable": {"thread_id": thread_id, "toolbox": toolbox},
-        "callbacks": callbacks or [],
-        "recursion_limit": RECURSION_LIMIT,
-    }
+def run_config(thread_id: str, toolbox, callbacks: list | None = None, user_id: str | None = None,
+               trace_path: str | None = None, trace: bool = True) -> dict:
+    """그래프 실행 config. trace=True면 trace.jsonl 기록 핸들러(trace_id = thread_id)를 붙인다."""
+    from src.tracing import JsonlTraceHandler
+
+    handlers = list(callbacks or [])
+    if trace:
+        handlers.append(JsonlTraceHandler(trace_path, trace_id=thread_id))
+    configurable = {"thread_id": thread_id, "toolbox": toolbox}
+    if user_id:
+        configurable["user_id"] = user_id
+    return {"configurable": configurable, "callbacks": handlers, "recursion_limit": RECURSION_LIMIT}

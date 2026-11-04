@@ -88,6 +88,8 @@ class MeetingState(TypedDict, total=False):
     validation_errors: list[str]                         # 출력 검증 오류
     retries: int                                         # 출력 검증 실패로 재실행한 횟수
     required: dict[str, int]                             # 단계별 필요한 실행 횟수 (재실행·재검토 시 증가)
+    glossary: dict[str, str]                             # 팀 용어집 (장기 기억)
+    learned: list[str]                                   # 이번 실행에서 장기 기억에 저장한 내용
     registered: list[str]                                # 등록·변경된 task / event ID
     failed: list[str]                                    # 등록 실패 항목과 이유
     report: str                                          # 최종 요약 보고서

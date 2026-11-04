@@ -89,6 +89,8 @@ def report(state: dict) -> dict:
             lines.append("\n## 결과\n- 승인 전이라 등록하지 않았습니다.")
         text = "\n".join(lines)
 
+    if learned := state.get("learned"):
+        text += "\n\n## 장기 기억\n" + "\n".join(f"- 다음부터 참고: {x}" for x in learned)
     if notes := state.get("guard_notes"):
         text = "\n".join(f"> ℹ {n}" for n in notes) + "\n\n" + text
     text = scrub(text)  # 출력 가드레일: 최종 보고서 PII 재검사

@@ -177,5 +177,5 @@ def confirm_edit(state: dict) -> dict:
     if text in APPROVE:
         return {**_back_to_review(state, notice=f"수정 {len(pending)}건을 반영했습니다.",
                                   items=_apply(state.get("action_items", []), pending)),
-                "done": ["confirm_edit"], "edits_applied": pending}
+                "done": ["confirm_edit"], "edits_applied": (state.get("edits_applied") or []) + pending}
     return {**_back_to_review(state, notice="수정을 반영하지 않았습니다."), "done": ["confirm_edit"]}
