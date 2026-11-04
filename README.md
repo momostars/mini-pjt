@@ -154,9 +154,14 @@ class MeetingState(TypedDict):
 
 | 서버 | 도구 | 데이터 |
 |---|---|---|
-| `directory-server` | `find_employee(name, title?)`, `get_team_members(team)` | `data/org.json` (직원 30명 내외, 동명이인 포함) |
-| `task-server` | `create_task`, `update_task(task_id, due_date)`, `list_tasks(assignee)`, `find_duplicate_task(title)` | `data/tasks.db` |
-| `calendar-server` | `create_event`, `check_availability(user, date)` | `data/calendar.db` |
+| `directory-server` | `find_employee(name, title?, team?)`, `get_team_members(team)` | `data/org.json` (직원 30명 내외, 동명이인 포함) |
+| `task-server` | `create_task(title, assignee_id, due_date?, source?)`, `update_task(task_id, due_date)`, `list_tasks(assignee_id?, status?)`, `find_duplicate_task(title, assignee_id?)` | `data/tasks.db` |
+| `calendar-server` | `create_event(title, start, end, attendees)`, `check_availability(user_id, date, end_date?)` | `data/calendar.db` |
+
+- 응답에 이메일을 넣지 않고, 이름이나 팀 없이 조직도를 조회할 수 없습니다 (조직도 대량 출력 방지)
+- `create_task`는 휴직자에게 배정하면 거부합니다. 삭제·완료 처리 도구는 두지 않습니다
+- `find_duplicate_task`는 글자 bigram 유사도로 **후보만** 찾습니다. 실제 중복인지는 Context Agent가 판단하고 HITL에서 확인합니다
+- `resolve_date`, `search_past_meetings`는 MCP가 아닌 로컬 도구입니다 (`src/tools.py`)
 
 - Agent 쪽은 `langchain-mcp-adapters`로 도구를 불러옵니다
 - 도구 호출은 콜백 추적(4.7)으로 `trace.jsonl`에 남깁니다 (Day4-2)
@@ -248,6 +253,7 @@ LangGraph `Store`에 사용자·팀별로 저장합니다.
 | "다음 주 ○요일" | 다음 주 해당 요일 |
 | "다음 주까지" | 다음 주 금요일 + 모호함 표시(검토 요청) |
 | "○○ 전까지" (예: QA 시작 전까지) | 기준 일정 직전 근무일 |
+| "○○ 전까지" (기준 일정에 시각이 있음, 예: 리허설 11/11 14:00) | 기준 일정 당일 (그 시각 전까지) |
 | "○○ 전날까지" (예: 배포 동결 전날) | 기준 일정 전 근무일 |
 | "오픈 2주 전" 등 | 기준 일정에서 계산 |
 
@@ -573,7 +579,7 @@ def get_embeddings():
 | **M0** 준비 ✅ | 환경 설정, 모의 데이터, 서비스 정의, 인-아웃 세트 | `data/`, `SERVICE.md`, `test_queries.csv`, `requirements.txt` | Day1 |
 | **M1** 추출 체인 ✅ | Extractor 단독 체인 + 구조화 출력 + 근거 문장 | `nodes/extractor.py`, `state.py`, `llm.py` | Day1, Day4-1 |
 | **M2** RAG ✅ | 과거 회의록 인덱싱, 검색, 중복 탐지, 검색 평가셋 작성과 Hit@k 측정 | `retriever.py`, `retrieval.jsonl` | Day2 |
-| **M3** MCP 서버 | 조직도, 업무, 캘린더 서버 3개 + 도구 로딩 | `mcp_servers/`, `tools.py` | Day4 |
+| **M3** MCP 서버 ✅ | 조직도, 업무, 캘린더 서버 3개 + 도구 로딩 | `mcp_servers/`, `tools.py` | Day4 |
 | **M4** 그래프 조립 | Supervisor + 작업 Agent 연결, 조건부 분기 | `agent.py`, `nodes/` | Day3, Day6 |
 | **M5** 안전장치 | HITL interrupt, 입력·출력 가드레일 미들웨어 | `guardrails.py` | Day5 |
 | **M6** 기억과 관측 | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
