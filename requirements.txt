@@ -1,0 +1,25 @@
+# Python 3.14 (교육 환경과 동일)
+# 2026-11-04 설치 후 확인한 버전으로 고정
+
+# LLM, Agent
+langchain==1.4.8
+langchain-aws==1.9.1
+langgraph==1.2.19
+langgraph-checkpoint-sqlite==3.1.3
+
+# 도구 (MCP)
+mcp==1.30.0
+langchain-mcp-adapters==0.3.2
+
+# RAG
+langchain-chroma==1.1.0
+chromadb==1.5.9
+
+# 공통
+pydantic==2.14.2
+python-dotenv==1.2.4
+
+# 평가
+ragas==0.4.3  # 버전별 API 변경이 커서 고정 필수
+langchain-community==0.4.1  # 0.4.2에서 vertexai 모듈이 빠져 ragas 0.4.3 import 실패
+pytest==9.2.0

@@ -1,0 +1,55 @@
+day1
+[Day1] 1. 환경 검증과 첫 호출 (실습)
+[Day1] 2. LLM API의 구조 (실습)
+[Day1] 3. LangChain 기본 구성요소 (실습)
+[Day1] 4. LCEL 체인 조립 (실습)
+[Day1] 5. Agent 개념과 멀티턴 대화 (실습)
+[Day1] 6. 도전과제: 나만의 문의 응답 체인 (실습)
+day2
+[Day2] 1. RAG의 개념과 필요성
+[Day2] 2. 문서 처리 파이프라인 (실습)
+[Day2] 3. 임베딩과 벡터 저장소 (실습)
+[Day2] 4. 기본 RAG 체인 구성과 검증 (실습)
+[Day2] 5. 검색 품질 개선 (실습)
+[Day2] 6. 도전과제: 평가 질문 세트 만들기 (실습)
+[Day2] 부록
+day3
+[Day3] 1. 체인에서 그래프로
+[Day3] 2. LangGraph 기본 구성요소 (실습)
+[Day3] 3. 상태 관리와 조건부 분기 (실습)
+[Day3] 4. ReAct 수동 루프 구현 (실습)
+[Day3] 5. LangGraph ReAct Agent (실습)
+[Day3] 6. 도전과제: 3가지 경로 테스트 (실습)
+[Day3] 참고. 자주 나오는 질문
+day4
+[Day4] 1. Tool 정의 심화 (실습)
+[Day4] 2. ToolNode와 호출 추적 (실습)
+[Day4] 3. MCP 표준의 이해
+[Day4] 4. 사내 시스템을 MCP 서버로 (실습)
+[Day4] 5. MCP 통합 Agent (실습)
+[Day4] 6. 도전과제: 운영 장애 주입 테스트 (실습)
+day5
+[Day5] 1. 미들웨어 동작 원리
+[Day5] 2. 미들웨어 구현과 코드 읽기 (실습)
+[Day5] 3. Human-in-the-Loop (HITL) (실습)
+[Day5] 4. 입력 가드레일 (실습)
+[Day5] 5. 출력 가드레일과 종합 적용 (실습)
+[Day5] 6. 도전과제 (페어 주입 테스트) & 참고 자료
+day6
+[Day6] 0. 실습 준비 (공통 checkpoint 확인)
+[Day6] 1. Multi-Agent 개념
+[Day6] 2. Supervisor 패턴의 구조 (실습)
+[Day6] 3. Supervisor 패턴 구현 (실습)
+[Day6] 4. RAG, 도구 통합 (실습)
+[Day6] 5. Hierarchical 패턴과 확장 (Extra)
+[Day6] 6. 도전과제: 라우팅 테스트셋 검증 (실습)
+[Day6] 오늘 만든 것 (7일차로 가져갈 것)
+day7
+[Day7] 1. Planning 변형 실습 (실습)
+[Day7] 2. Long-term Memory(장기 기억) (실습)
+[Day7] 3. Observability(관측 가능성): 추적 (실습)
+[Day7] 4. 평가: 누적 평가셋 실행 (실습)
+[Day7] 5. 보안, 운영 체크리스트
+[Day7] 6. 통합 점검과 Mini PJT 준비 (실습)
+[Day7] 7.Physical AI 특강
+[부록] 에이전트 분류와 아이디어들

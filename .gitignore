@@ -1,0 +1,50 @@
+# ── 환경 변수 / 비밀 정보 ──
+.env
+.env.*
+!.env.example
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ── 가상환경 ──
+.venv/
+venv/
+env/
+
+# ── 테스트 / 캐시 ──
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ── 프로젝트 런타임 산출물 ──
+.chroma/
+.state/
+*.sqlite
+*.sqlite-journal
+data/*.db
+evaluation/results/
+
+# ── 로그 ──
+*.log
+logs/
+
+# ── IDE / 에디터 ──
+.vscode/
+.idea/
+*.swp
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Claude Code 로컬 설정 ──
+.claude/settings.local.json

@@ -1,0 +1,52 @@
+{
+  "company": "에이엑스랩(가상)",
+  "project": "스마트오피스 포털 v2",
+  "updated_at": "2026-11-01",
+  "teams": [
+    {"id": "PLAN", "name": "기획팀", "leader_id": "E001"},
+    {"id": "PLAT", "name": "플랫폼개발팀", "leader_id": "E005"},
+    {"id": "FE", "name": "프론트엔드팀", "leader_id": "E012"},
+    {"id": "QA", "name": "QA팀", "leader_id": "E017"},
+    {"id": "INFRA", "name": "인프라운영팀", "leader_id": "E021"},
+    {"id": "DESIGN", "name": "디자인팀", "leader_id": "E026"},
+    {"id": "SEC", "name": "정보보호팀", "leader_id": "E029"}
+  ],
+  "employees": [
+    {"id": "E001", "name": "정하늘", "team": "기획팀", "title": "수석", "position": "팀장", "role": "PM 총괄", "email": "haneul.jung@axlab.example", "aliases": ["하늘님", "정 팀장", "PM님"], "status": "active"},
+    {"id": "E002", "name": "오지현", "team": "기획팀", "title": "책임", "position": "팀원", "role": "서비스 기획, 운영 공지", "email": "jihyun.oh@axlab.example", "aliases": ["지현님", "오 책임"], "status": "active"},
+    {"id": "E003", "name": "한도윤", "team": "기획팀", "title": "선임", "position": "팀원", "role": "알림 센터 기획", "email": "doyun.han@axlab.example", "aliases": ["도윤님", "한 선임"], "status": "active"},
+    {"id": "E004", "name": "서유나", "team": "기획팀", "title": "사원", "position": "팀원", "role": "회의록 작성, 일정 관리", "email": "yuna.seo@axlab.example", "aliases": ["유나님"], "status": "active"},
+
+    {"id": "E005", "name": "강태호", "team": "플랫폼개발팀", "title": "수석", "position": "팀장", "role": "백엔드 총괄", "email": "taeho.kang@axlab.example", "aliases": ["태호님", "강 팀장"], "status": "active"},
+    {"id": "E006", "name": "김민준", "team": "플랫폼개발팀", "title": "책임", "position": "팀원", "role": "인증, 로그인 API", "email": "minjun.kim@axlab.example", "aliases": ["민준님", "김 책임"], "status": "active"},
+    {"id": "E007", "name": "이서연", "team": "플랫폼개발팀", "title": "선임", "position": "팀원", "role": "알림 서비스 백엔드", "email": "seoyeon.lee@axlab.example", "aliases": ["서연님", "이 선임"], "status": "active"},
+    {"id": "E008", "name": "박지훈", "team": "플랫폼개발팀", "title": "선임", "position": "팀원", "role": "API 게이트웨이, 공통 모듈", "email": "jihoon.park@axlab.example", "aliases": ["지훈님", "박 선임"], "status": "active"},
+    {"id": "E009", "name": "최우진", "team": "플랫폼개발팀", "title": "책임", "position": "팀원", "role": "DB, 성능", "email": "woojin.choi@axlab.example", "aliases": ["우진님", "최 책임"], "status": "active"},
+    {"id": "E010", "name": "윤채원", "team": "플랫폼개발팀", "title": "사원", "position": "팀원", "role": "로깅, 공통 유틸", "email": "chaewon.yoon@axlab.example", "aliases": ["채원님"], "status": "active"},
+    {"id": "E011", "name": "임성민", "team": "플랫폼개발팀", "title": "선임", "position": "팀원", "role": "배치, 데이터 연동", "email": "sungmin.lim@axlab.example", "aliases": ["성민님"], "status": "on_leave", "leave_until": "2026-11-30"},
+
+    {"id": "E012", "name": "송가은", "team": "프론트엔드팀", "title": "책임", "position": "팀장", "role": "프론트엔드 총괄", "email": "gaeun.song@axlab.example", "aliases": ["가은님", "송 팀장"], "status": "active"},
+    {"id": "E013", "name": "이서연", "team": "프론트엔드팀", "title": "책임", "position": "팀원", "role": "메인 대시보드, 위젯", "email": "seoyeon.lee2@axlab.example", "aliases": ["서연 책임님", "이 책임"], "status": "active"},
+    {"id": "E014", "name": "조현우", "team": "프론트엔드팀", "title": "선임", "position": "팀원", "role": "API 클라이언트, 상태 관리", "email": "hyunwoo.cho@axlab.example", "aliases": ["현우님", "조 선임"], "status": "active"},
+    {"id": "E015", "name": "배수아", "team": "프론트엔드팀", "title": "선임", "position": "팀원", "role": "알림 센터 화면", "email": "sua.bae@axlab.example", "aliases": ["수아님", "배 선임"], "status": "active"},
+    {"id": "E016", "name": "남궁민", "team": "프론트엔드팀", "title": "사원", "position": "팀원", "role": "공통 컴포넌트", "email": "min.namgung@axlab.example", "aliases": ["궁민님", "남궁 사원"], "status": "active"},
+
+    {"id": "E017", "name": "류정민", "team": "QA팀", "title": "책임", "position": "팀장", "role": "QA 총괄, 릴리즈 판정", "email": "jungmin.ryu@axlab.example", "aliases": ["정민님", "류 팀장"], "status": "active"},
+    {"id": "E018", "name": "김민준", "team": "QA팀", "title": "선임", "position": "팀원", "role": "테스트 자동화", "email": "minjun.kim2@axlab.example", "aliases": ["민준 선임님", "김 선임"], "status": "active"},
+    {"id": "E019", "name": "박소율", "team": "QA팀", "title": "선임", "position": "팀원", "role": "회귀 테스트", "email": "soyul.park@axlab.example", "aliases": ["소율님", "박 선임"], "status": "active"},
+    {"id": "E020", "name": "안재희", "team": "QA팀", "title": "사원", "position": "팀원", "role": "테스트 케이스 관리", "email": "jaehee.ahn@axlab.example", "aliases": ["재희님"], "status": "active"},
+
+    {"id": "E021", "name": "문경수", "team": "인프라운영팀", "title": "수석", "position": "팀장", "role": "인프라 총괄", "email": "kyungsoo.moon@axlab.example", "aliases": ["경수님", "문 팀장"], "status": "active"},
+    {"id": "E022", "name": "황보석", "team": "인프라운영팀", "title": "책임", "position": "팀원", "role": "클라우드 이전", "email": "seok.hwangbo@axlab.example", "aliases": ["보석님", "황보 책임"], "status": "active"},
+    {"id": "E023", "name": "신예린", "team": "인프라운영팀", "title": "선임", "position": "팀원", "role": "모니터링, 알람", "email": "yerin.shin@axlab.example", "aliases": ["예린님", "신 선임"], "status": "active"},
+    {"id": "E024", "name": "권도현", "team": "인프라운영팀", "title": "선임", "position": "팀원", "role": "네트워크, 접근 제어", "email": "dohyun.kwon@axlab.example", "aliases": ["도현님", "권 선임"], "status": "active"},
+    {"id": "E025", "name": "장하린", "team": "인프라운영팀", "title": "사원", "position": "팀원", "role": "배포 자동화", "email": "harin.jang@axlab.example", "aliases": ["하린님"], "status": "active"},
+
+    {"id": "E026", "name": "홍세영", "team": "디자인팀", "title": "책임", "position": "팀장", "role": "디자인 시스템", "email": "seyoung.hong@axlab.example", "aliases": ["세영님", "홍 팀장"], "status": "active"},
+    {"id": "E027", "name": "유다인", "team": "디자인팀", "title": "선임", "position": "팀원", "role": "UX, 접근성", "email": "dain.yoo@axlab.example", "aliases": ["다인님", "유 선임"], "status": "active"},
+    {"id": "E028", "name": "차민호", "team": "디자인팀", "title": "선임", "position": "팀원", "role": "UI 시안", "email": "minho.cha@axlab.example", "aliases": ["민호님", "차 선임"], "status": "active"},
+
+    {"id": "E029", "name": "노은비", "team": "정보보호팀", "title": "책임", "position": "팀장", "role": "보안 점검", "email": "eunbi.noh@axlab.example", "aliases": ["은비님", "노 책임"], "status": "active"},
+    {"id": "E030", "name": "백승우", "team": "정보보호팀", "title": "선임", "position": "팀원", "role": "취약점 진단", "email": "seungwoo.baek@axlab.example", "aliases": ["승우님", "백 선임"], "status": "active"}
+  ]
+}
