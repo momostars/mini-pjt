@@ -1,9 +1,9 @@
 """상태와 Pydantic 스키마 (README 3.3절)."""
 
+import operator
 from datetime import date
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.documents import Document
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,25 @@ class ActionItem(BaseModel):
     evidence: str                                        # 근거가 된 원문 문장
     duplicate_of: str | None = None                      # 중복 의심 기존 할 일 ID (Context)
     confidence: float
+    warnings: list[str] = Field(default_factory=list)    # 검토 표에 보일 경고 (동명이인, 휴가 충돌, 중복 등)
+    notes: list[str] = Field(default_factory=list)       # 참고 정보 (기한 계산 근거 등). 확인 요청은 아님
+
+
+class EventDraft(BaseModel):
+    """일정 등록 요청 (intent=schedule). LLM이 원문 표현을 채우고 Resolver가 확정한다."""
+
+    title: str
+    date_raw: str                                        # "11/11(수)", "다음 주 수요일"
+    start_time: str | None = None                        # "14:00"
+    end_time: str | None = None
+    attendees_raw: list[str] = Field(default_factory=list)  # 사람·팀 원문 표현
+    evidence: str
+    # 확정 결과
+    date: str | None = None
+    start: str | None = None                             # ISO 8601
+    end: str | None = None
+    attendee_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class Decision(BaseModel):
@@ -43,17 +62,22 @@ class OpenIssue(BaseModel):
 
 class MeetingState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
+    request: str                                         # 사용자 입력 원문
     intent: Literal["minutes", "schedule", "conflict_check", "out_of_scope", "empty"]
     raw_minutes: str
     masked_minutes: str
     meeting_meta: dict                                   # 날짜, 회의명, 참석자
     plan: list[str]
+    done: Annotated[list[str], operator.add]             # 끝난 작업 단계 (Supervisor가 다음 단계 결정에 사용)
     decisions: list[Decision]
     action_items: list[ActionItem]
     open_issues: list[OpenIssue]
-    related_context: list[Document]
+    event: EventDraft | None
+    related_context: list[dict]                          # 검색된 과거 회의록 청크 (source, date, section, content)
     review_status: Literal["pending", "approved", "edited", "rejected"]
-    registered: list[str]                                # 등록된 task / event ID
+    registered: list[str]                                # 등록·변경된 task / event ID
+    failed: list[str]                                    # 등록 실패 항목과 이유
+    report: str                                          # 최종 요약 보고서
     next_agent: str
 
 

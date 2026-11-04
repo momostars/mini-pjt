@@ -80,12 +80,15 @@ flowchart TD
 | Agent | 역할 | 사용 도구 |
 |---|---|---|
 | **Router** | 입력 의도를 분류 (회의록 정리 / 일정 등록 / 결정 충돌 확인 / 범위 밖 / 입력 없음). 범위 밖·입력 없음은 안내 후 종료 | — |
-| **Supervisor** | 기본은 규칙 순서(추출 → 맥락 → 정리 → 검토)로 다음 작업자를 고름. 출력 검증에 실패했을 때만 LLM이 어느 노드를 다시 실행할지 판단 | — |
-| **Planner** | 의도와 회의록 유형(주간회의, 기획회의 등)에 맞춰 처리 단계 결정 (Day7 Planning) | — |
+| **Supervisor** | 기본은 규칙 순서(추출 → 맥락 → 정리 → 검토)로 다음 작업자를 고름. 등록할 항목이 없으면 검토·등록을 건너뛰고, 승인되지 않으면 Executor로 보내지 않음. 출력 검증에 실패했을 때만 LLM이 어느 노드를 다시 실행할지 판단(M5) | — |
+| **Planner** | 의도에 맞춰 처리 단계 결정 (Day7 Planning). 지금은 규칙 기반이고, 회의 날짜도 규칙으로 찾음 | — |
 | **Extractor** | 결정 사항, 할 일, 미결 이슈를 구조화 출력으로 추출. 원문 근거 문장 포함 | — |
 | **Context** | 과거 회의록에서 관련 결정을 찾고, 기존 업무와 중복되는 할 일을 검토 전에 찾음 | `search_past_meetings` (RAG), `find_duplicate_task` |
-| **Resolver** | 담당자 표현을 실제 직원으로 매칭하고, 상대 날짜를 실제 날짜로 변환. 휴가·휴직과 기존 업무 확인 | `find_employee`, `get_team_members`, `check_availability`, `list_tasks`, `resolve_date` |
+| **Resolver** | 담당자 표현을 실제 직원으로 매칭하고, 상대 날짜를 실제 날짜로 변환. 휴가·휴직과 기존 업무 확인. 기한을 마일스톤으로 계산하면 근거 회의록을 찾아 붙임 | `find_employee`, `get_team_members`, `check_availability`, `list_tasks`, `resolve_date`, `search_past_meetings` |
+| **Scheduler** | 일정 등록 요청에서 일정 정보를 뽑고 참석자·날짜·가용성 확정 (intent=schedule) | `find_employee`, `get_team_members`, `resolve_date`, `check_availability` |
 | **Executor** | 승인된 항목만 등록하거나 기존 업무의 기한을 변경 | `create_task`, `update_task`, `create_event` |
+
+**도구 호출과 LLM 판단의 분리**: Context·Resolver·Scheduler는 도구 호출 순서를 코드로 고정해 필요한 도구가 항상 호출되게 하고, 판단이 필요한 부분만 LLM이 정합니다(동명이인 선택, 기한 표현의 지시어 해석, 결정 충돌·실제 중복 여부). LLM이 고른 직원 ID·출처·업무 ID는 도구 결과 안에 있는 값만 받아들입니다.
 
 ### 3.3 상태 스키마 (Day3 상태 관리)
 
@@ -102,6 +105,21 @@ class ActionItem(BaseModel):
     evidence: str                  # 근거가 된 원문 문장
     duplicate_of: str | None       # 중복 의심 기존 할 일 ID (승인 시 신규 등록 대신 기한 변경)
     confidence: float
+    warnings: list[str]            # 검토 표의 경고 (동명이인, 휴가 충돌, 중복, 기한 모호 등). 있으면 확인 필요
+    notes: list[str]               # 참고 정보 (기한 계산 근거 회의록 등)
+
+class EventDraft(BaseModel):       # 일정 등록 요청 (intent=schedule)
+    title: str
+    date_raw: str                  # 원문 표현
+    start_time: str | None
+    end_time: str | None
+    attendees_raw: list[str]       # 사람·팀 원문 표현
+    evidence: str
+    date: str | None               # 이하 Scheduler가 확정
+    start: str | None
+    end: str | None
+    attendee_ids: list[str]
+    warnings: list[str]
 
 class Decision(BaseModel):
     id: str
@@ -118,19 +136,27 @@ class OpenIssue(BaseModel):        # 미결 이슈. 할 일로 등록하지 않�
 
 class MeetingState(TypedDict):
     messages: Annotated[list, add_messages]
+    request: str                   # 사용자 입력 원문
     intent: Literal["minutes", "schedule", "conflict_check", "out_of_scope", "empty"]
     raw_minutes: str
     masked_minutes: str
-    meeting_meta: dict             # 날짜, 회의명, 참석자
+    meeting_meta: dict             # 날짜, 회의명, 참석자, 원본 파일명
     plan: list[str]
+    done: Annotated[list[str], operator.add]  # 끝난 단계 (Supervisor가 다음 단계 결정에 사용)
     decisions: list[Decision]
     action_items: list[ActionItem]
     open_issues: list[OpenIssue]
-    related_context: list[Document]
+    event: EventDraft | None
+    related_context: list[dict]    # 검색된 과거 회의록 청크
     review_status: Literal["pending", "approved", "edited", "rejected"]
-    registered: list[str]          # 등록된 task / event ID
+    registered: list[str]          # 등록·변경 결과
+    failed: list[str]              # 등록 실패 항목과 이유
+    report: str                    # 최종 요약 보고서
     next_agent: str
 ```
+
+- 체크포인트에서 Pydantic 상태 타입을 복원할 수 있도록 `allowed_msgpack_modules`에 등록합니다 (`src/agent.py`)
+- 그래프 실행 config: `{"configurable": {"thread_id": ..., "toolbox": Toolbox}, "callbacks": [...]}`. `Toolbox`는 MCP 서버 연결을 유지한 채 도구를 이름으로 부르는 창구입니다 (`src/tools.py`의 `open_toolbox()`)
 
 ---
 
@@ -388,13 +414,17 @@ mini-pjt_jihyeon_kim/
 │   ├── tools.py                  # [규정] 도메인 도구 (MCP 도구 로딩, resolve_date, search_past_meetings)
 │   ├── retriever.py              # [규정] RAG 파이프라인 (회의록 분할·임베딩·인덱싱·검색)
 │   ├── nodes/                    # 작업 Agent 노드
+│   │   ├── common.py             # Toolbox 꺼내기, 회의 날짜 찾기
 │   │   ├── router.py
 │   │   ├── supervisor.py
 │   │   ├── planner.py
 │   │   ├── extractor.py
 │   │   ├── context.py
 │   │   ├── resolver.py
-│   │   └── executor.py
+│   │   ├── scheduler.py          # 일정 등록 요청 처리
+│   │   ├── review.py             # HITL 검토 (interrupt)
+│   │   ├── executor.py
+│   │   └── report.py             # 요약 보고서
 │   ├── state.py                  # 상태, Pydantic 스키마
 │   ├── guardrails.py             # 입력·출력 가드레일 미들웨어
 │   ├── memory.py                 # 장기 기억 Store
@@ -402,6 +432,7 @@ mini-pjt_jihyeon_kim/
 │   ├── tracing.py                # 콜백 추적 (trace.jsonl 기록·집계)
 │   ├── cli.py                    # 실행 진입점 (HITL 대화)
 │   └── mcp_servers/              # 모의 사내 시스템 (MCP 서버)
+│       ├── common.py             # 경로, 조직도, SQLite 적재·초기화 (reset_all)
 │       ├── directory_server.py
 │       ├── task_server.py
 │       └── calendar_server.py
@@ -580,7 +611,7 @@ def get_embeddings():
 | **M1** 추출 체인 ✅ | Extractor 단독 체인 + 구조화 출력 + 근거 문장 | `nodes/extractor.py`, `state.py`, `llm.py` | Day1, Day4-1 |
 | **M2** RAG ✅ | 과거 회의록 인덱싱, 검색, 중복 탐지, 검색 평가셋 작성과 Hit@k 측정 | `retriever.py`, `retrieval.jsonl` | Day2 |
 | **M3** MCP 서버 ✅ | 조직도, 업무, 캘린더 서버 3개 + 도구 로딩 | `mcp_servers/`, `tools.py` | Day4 |
-| **M4** 그래프 조립 | Supervisor + 작업 Agent 연결, 조건부 분기 | `agent.py`, `nodes/` | Day3, Day6 |
+| **M4** 그래프 조립 ✅ | Supervisor + 작업 Agent 연결, 조건부 분기 | `agent.py`, `nodes/` | Day3, Day6 |
 | **M5** 안전장치 | HITL interrupt, 입력·출력 가드레일 미들웨어 | `guardrails.py` | Day5 |
 | **M6** 기억과 관측 | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
 | **M7** 1차 자체 평가 | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |

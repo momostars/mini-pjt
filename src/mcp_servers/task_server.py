@@ -80,7 +80,7 @@ def update_task(task_id: str, due_date: str | None) -> dict:
 
 
 @mcp.tool()
-def list_tasks(assignee_id: str | None = None, status: str | None = None) -> list[dict]:
+def list_tasks(assignee_id: str | None = None, status: str | None = None) -> dict:
     """업무 목록. assignee_id로 담당자의 기존 업무를 확인할 때 쓴다. status: todo/in_progress/done."""
     sql, args = "SELECT * FROM tasks WHERE 1=1", []
     if assignee_id:
@@ -90,7 +90,7 @@ def list_tasks(assignee_id: str | None = None, status: str | None = None) -> lis
         sql += " AND status = ?"
         args.append(status)
     with connect(TASKS_DB) as conn:
-        return [_row(r) for r in conn.execute(sql + " ORDER BY id", args)]
+        return {"tasks": [_row(r) for r in conn.execute(sql + " ORDER BY id", args)]}
 
 
 def _bigrams(text: str) -> set[str]:

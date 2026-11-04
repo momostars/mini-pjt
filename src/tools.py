@@ -5,6 +5,7 @@ resolve_date는 LLM을 쓰지 않는다 (README 4.8절 기한 변환 규칙).
 
 import asyncio
 import json
+from contextlib import AsyncExitStack, asynccontextmanager
 import os
 import re
 import sys
@@ -100,14 +101,19 @@ def _result(base: date, expression: str, value: date | None, rule: str, ambiguou
     }
 
 
-def _reference(name: str, reference_date: str | None) -> tuple[datetime | None, str]:
-    """기준 일정의 시각. reference_date가 있으면 그것을, 없으면 캘린더 마일스톤에서 찾는다."""
+def _reference(name: str, reference_date: str | None) -> tuple[datetime | None, str, dict | None]:
+    """기준 일정의 (시각, 설명, 마일스톤). reference_date가 있으면 그것을, 없으면 캘린더 마일스톤에서 찾는다."""
     if reference_date:
-        return datetime.fromisoformat(reference_date), "reference_date"
+        return datetime.fromisoformat(reference_date), "reference_date", None
     milestone = find_milestone(name)
     if milestone:
-        return datetime.fromisoformat(milestone["date"]), f"마일스톤: {milestone['title']}"
-    return None, ""
+        return datetime.fromisoformat(milestone["date"]), f"마일스톤: {milestone['title']}", milestone
+    return None, "", None
+
+
+def _with_milestone(result: dict, milestone: dict | None) -> dict:
+    result["milestone"] = milestone  # 근거 회의록을 찾을 때 쓴다
+    return result
 
 
 def resolve_date_rule(expression: str, base_date: str, reference_date: str | None = None) -> dict:
@@ -159,24 +165,29 @@ def resolve_date_rule(expression: str, base_date: str, reference_date: str | Non
 
     # 기준 일정 기준: "○○ N주 전", "○○ N일 전", "○○ 전날", "○○ 전"
     if m := re.fullmatch(r"(.+?)(\d+)(주|일)전", compact):
-        ref, source = _reference(m[1], reference_date)
+        ref, source, ms = _reference(m[1], reference_date)
         if ref is None:
             return _result(base, expr, None, f"기준 일정 '{m[1]}'을 찾지 못함",
                            note="기준 일정 날짜를 reference_date로 넘기거나 사용자에게 확인")
         days = int(m[2]) * (7 if m[3] == "주" else 1)
-        return _result(base, expr, ref.date() - timedelta(days=days), f"{source}에서 {m[2]}{m[3]} 전", note=note)
+        return _with_milestone(
+            _result(base, expr, ref.date() - timedelta(days=days), f"{source}에서 {m[2]}{m[3]} 전", note=note), ms
+        )
 
     if m := re.fullmatch(r"(.+?)(전날|전)", compact):
         name = m[1]
-        ref, source = _reference(name, reference_date)
+        ref, source, ms = _reference(name, reference_date)
         if ref is None:
             return _result(base, expr, None, f"기준 일정 '{name}'을 찾지 못함",
                            note="기준 일정 날짜를 reference_date로 넘기거나 사용자에게 확인")
         # 시각이 있는 일정(예: 14:00 리허설) '전까지'는 같은 날 일정 전까지. 종일·자정 일정은 전 근무일
         if m[2] == "전" and (ref.hour, ref.minute) != (0, 0):
-            return _result(base, expr, ref.date(), f"{source} 당일({ref:%H:%M}) 전",
-                           note=f"{ref:%H:%M} 이전까지")
-        return _result(base, expr, previous_business_day(ref.date()), f"{source} 전 근무일", note=note)
+            return _with_milestone(
+                _result(base, expr, ref.date(), f"{source} 당일({ref:%H:%M}) 전", note=f"{ref:%H:%M} 이전까지"), ms
+            )
+        return _with_milestone(
+            _result(base, expr, previous_business_day(ref.date()), f"{source} 전 근무일", note=note), ms
+        )
 
     return _result(base, expr, None, "규칙에 없는 표현", note="사용자에게 기한 확인 필요")
 
@@ -253,3 +264,57 @@ def load_mcp_tools() -> list:
 
 def local_tools() -> list:
     return [resolve_date, search_past_meetings]
+
+
+class ToolCallError(Exception):
+    pass
+
+
+def _parse_output(out):
+    """MCP 도구 결과(텍스트 블록 목록)를 dict/list로 바꾼다. 로컬 도구 결과는 그대로."""
+    if isinstance(out, (dict, list)) and not (
+        isinstance(out, list) and out and isinstance(out[0], dict) and out[0].get("type") == "text"
+    ):
+        return out
+    if isinstance(out, list):
+        # FastMCP는 list 반환값을 항목마다 텍스트 블록 하나로 보낸다 → 블록별로 파싱
+        texts = [block.get("text", "") for block in out if isinstance(block, dict)]
+        if len(texts) != 1:
+            return [_parse_output(t) for t in texts]
+        out = texts[0]
+    if isinstance(out, str):
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            return out
+    return out
+
+
+class Toolbox:
+    """노드가 도구를 이름으로 부르는 창구. config를 넘겨 콜백 추적(trace)에 도구 호출이 남게 한다."""
+
+    def __init__(self, tools: list):
+        self.tools = {t.name: t for t in tools}
+
+    async def call(self, name: str, args: dict, config=None):
+        """도구를 호출한다. 실패하면 ToolCallError(사람이 읽을 메시지)를 낸다."""
+        try:
+            out = await self.tools[name].ainvoke(args, config=config)
+        except Exception as e:  # MCP 도구 오류(isError), 입력 검증 오류 등
+            raise ToolCallError(f"{name} 실패: {e}") from e
+        return _parse_output(out)
+
+
+@asynccontextmanager
+async def open_toolbox():
+    """MCP 서버 3개와 연결을 유지한 채 Toolbox를 연다. 호출마다 서버를 새로 띄우지 않는다."""
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+    from langchain_mcp_adapters.tools import load_mcp_tools as _load
+
+    client = MultiServerMCPClient(mcp_connections())
+    async with AsyncExitStack() as stack:
+        tools = []
+        for name in MCP_SERVERS:
+            session = await stack.enter_async_context(client.session(name))
+            tools += await _load(session, server_name=name, handle_tool_errors=False)
+        yield Toolbox(tools + local_tools())

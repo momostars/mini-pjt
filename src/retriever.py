@@ -9,6 +9,7 @@
 import argparse
 import os
 import re
+import threading
 from functools import cache
 from pathlib import Path
 
@@ -90,14 +91,23 @@ def load_documents(directory: Path = PAST_MEETINGS_DIR) -> list[Document]:
 # ── 저장소 ──────────────────────────────────────────────
 
 
+_store_lock = threading.Lock()
+
+
 @cache
-def get_vectorstore() -> Chroma:
+def _create_vectorstore() -> Chroma:
     return Chroma(
         collection_name=COLLECTION,
         embedding_function=get_embeddings(),
         persist_directory=CHROMA_DIR,
         collection_metadata={"hnsw:space": "cosine"},  # 관련도 = 1 - 코사인 거리
     )
+
+
+def get_vectorstore() -> Chroma:
+    """병렬 검색(여러 스레드)에서 Chroma 클라이언트가 동시에 여러 번 만들어지지 않게 잠근다."""
+    with _store_lock:
+        return _create_vectorstore()
 
 
 def ingest() -> int:

@@ -13,7 +13,7 @@ from functools import cache
 from pathlib import Path
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 
 from src.llm import get_llm
 from src.state import ActionItem, Decision, ExtractionResult, OpenIssue
@@ -140,10 +140,10 @@ def evidence_in_source(evidence: str | None, normalized_source: str) -> bool:
     return bool(normalized) and normalized in normalized_source
 
 
-def extract(state: dict) -> dict:
+def extract(state: dict, config: RunnableConfig | None = None) -> dict:
     """그래프 노드. 마스킹된 회의록이 있으면 그것을, 없으면 원문을 쓴다."""
     minutes = state.get("masked_minutes") or state.get("raw_minutes") or ""
-    result: ExtractionResult = build_chain().invoke({"minutes": minutes})
+    result: ExtractionResult = build_chain().invoke({"minutes": minutes}, config=config)
 
     # 출력 가드레일 1차: 근거 문장이 원문에 없는 항목은 버린다
     source = normalize_text(minutes)
@@ -172,11 +172,15 @@ def extract(state: dict) -> dict:
         # 근거 문장에 PII가 섞일 수 있어 내용은 남기지 않고 건수만 기록
         logger.warning("근거 문장이 원문에 없어 %d건 제외", dropped)
 
+    # 회의 날짜는 Planner가 규칙으로 찾은 값을 우선한다 (LLM이 연도를 추측하지 않게)
+    meta = {**result.meeting_meta.model_dump(), **{k: v for k, v in (state.get("meeting_meta") or {}).items() if v}}
+
     return {
-        "meeting_meta": result.meeting_meta.model_dump(),
+        "meeting_meta": meta,
         "decisions": decisions,
         "action_items": action_items,
         "open_issues": open_issues,
+        "done": ["extractor"],
     }
 
 
