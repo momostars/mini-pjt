@@ -60,6 +60,7 @@
 | `find_duplicate_task` | 업무관리 | 비슷한 기존 업무 검색 | MCP `task-server` |
 | `create_event` | 캘린더 | 일정 등록 (리허설, 회의 등) | MCP `calendar-server` |
 | `check_availability` | 캘린더 | 담당자 휴가·휴직·교육 일정 확인 | MCP `calendar-server` |
+| `list_events` | 캘린더 | 기간별 일정 조회 (화면의 캘린더 탭 전용, 최대 31일) | MCP `calendar-server` |
 | `search_past_meetings` | 회의록 | 과거 결정·할 일 검색 (RAG) | 내부 도구 (Chroma 검색기) |
 | `resolve_date` | 날짜 | 상대 날짜 → 실제 날짜 (공휴일·주말 반영) | 내부 함수 (규칙 기반, LLM 미사용) |
 

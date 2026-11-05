@@ -196,7 +196,7 @@ class MeetingState(TypedDict):
 |---|---|---|
 | `directory-server` | `find_employee(name, title?, team?)`, `get_team_members(team)` | `data/org.json` (직원 30명 내외, 동명이인 포함) |
 | `task-server` | `create_task(title, assignee_id, due_date?, source?)`, `update_task(task_id, due_date)`, `list_tasks(assignee_id?, status?)`, `find_duplicate_task(title, assignee_id?)` | `data/tasks.db` |
-| `calendar-server` | `create_event(title, start, end, attendees)`, `check_availability(user_id, date, end_date?)` | `data/calendar.db` |
+| `calendar-server` | `create_event(title, start, end, attendees)`, `check_availability(user_id, date, end_date?)`, `list_events(start, end, user_id?)` | `data/calendar.db` |
 
 - 응답에 이메일을 넣지 않고, 이름이나 팀 없이 조직도를 조회할 수 없습니다 (조직도 대량 출력 방지)
 - **호칭 처리** (`find_employee`): 사내 호칭은 "민준님", "민준 프로", "김 책임", "서연 책임님", "하린씨"처럼 다양합니다
@@ -211,6 +211,7 @@ class MeetingState(TypedDict):
   - 담당자가 불참자 명단에 있으면 경고만 붙여 확인받습니다. 배정은 막지 않습니다 (다른 사람이 전달한 일일 수 있음)
   - 팀 단위 담당자("QA 쪽")는 고르지 않고, 회의에 참석한 팀원을 참고 정보로 보여 줍니다
 - `create_task`는 휴직자에게 배정하면 거부합니다. 삭제·완료 처리 도구는 두지 않습니다
+- `list_events`는 화면(`app.py`)의 캘린더 탭이 쓰는 조회 전용 도구입니다. 한 번에 31일까지만 조회해 일정 전체를 통째로 내보내지 않고, Agent 노드는 부르지 않습니다(M9 이후 추가)
 - `find_duplicate_task`는 글자 bigram 유사도로 **후보만** 찾습니다. 실제 중복인지는 Context Agent가 판단하고 HITL에서 확인합니다
   - 제목 표현이 조금만 달라도 후보에서 빠질 수 있어(M8, "이메일 템플릿 마감" ↔ T-026 "이메일 다이제스트 템플릿 디자인"), Resolver가 담당자를 확정한 뒤 그 사람의 진행 중 업무(`list_tasks`)를 낮은 기준(0.3)으로 후보로 골라 Context와 같은 LLM 판단을 한 번 더 거칩니다
 - `resolve_date`, `search_past_meetings`는 MCP가 아닌 로컬 도구입니다 (`src/tools.py`)
@@ -690,6 +691,7 @@ def get_embeddings():
 | **M7** 1차 자체 평가 ✅ | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |
 | **M8** 개선·2차 자체 평가 ✅ | 1차 실패 케이스 개선 후 재평가 | `round2_report.md` | Day 10 |
 | **M9** 마무리 ✅ | 데모 시나리오, Streamlit 화면, 실행 전 점검, run.sh (Dockerfile·발표 자료는 생략) | `docs/demo.md`, `app.py`, `healthcheck.py`, `run.sh` | |
+| M9 이후 | 화면에 업무·캘린더 조회 탭 추가: 승인 직후 MCP로 다시 조회해 이번 실행의 신규·기한 변경과 담당자 부재 일정을 표시 | `app.py`, `calendar_server.py`(`list_events`) | |
 
 > 우선순위: **M1 → M3 → M4 → M5**가 핵심 경로입니다. 시간이 부족하면 M2(RAG)와 M6(기억)를 간소화합니다.
 

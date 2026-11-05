@@ -269,6 +269,28 @@ def test_create_event():
         calendar_server.create_event("잘못된 시각", "2026-11-11T14:00:00+09:00", "2026-11-11T13:00:00+09:00", [])
 
 
+def test_list_events_range_and_user_filter():
+    week = calendar_server.list_events("2026-11-09", "2026-11-15")
+    ids = [e["id"] for e in week["events"]]
+    assert {"C-001", "C-005", "C-101", "C-104", "C-105"} <= set(ids)  # 기간과 겹치면 포함 (11월 한 달 휴직도)
+    assert week["range"] == ["2026-11-09", "2026-11-15"]
+    mine = calendar_server.list_events("2026-11-09", "2026-11-15", user_id="E006")
+    assert [e["id"] for e in mine["events"]] == ["C-101"]  # 김민준 책임 휴가만
+
+    # 승인 후 등록한 일정이 바로 보인다
+    calendar_server.create_event("운영 이전 리허설", "2026-11-11T14:00:00+09:00", "2026-11-11T16:00:00+09:00", ["E022"])
+    assert "C-201" in [e["id"] for e in calendar_server.list_events("2026-11-11", "2026-11-11")["events"]]
+
+
+def test_list_events_limits():
+    with pytest.raises(ValueError, match="31일"):
+        calendar_server.list_events("2026-11-01", "2026-12-31")  # 일정 전체를 한 번에 내보내지 않는다
+    with pytest.raises(ValueError):
+        calendar_server.list_events("2026-11-15", "2026-11-09")
+    with pytest.raises(ValueError):
+        calendar_server.list_events("2026-11-09", "2026-11-15", user_id="E999")
+
+
 # ── 결정 충돌 경고 문구 (M8): 같은 파일의 청크가 여럿이면 결정이 적힌 구역을 출처로 ──
 
 

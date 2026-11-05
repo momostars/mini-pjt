@@ -9,7 +9,9 @@ CLI(src/cli.py)와 같은 그래프를 같은 프로세스에서 호출한다. �
 """
 
 import asyncio
+import re
 import uuid
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +20,7 @@ from langgraph.types import Command
 
 from src.agent import build_graph, run_config, sqlite_checkpointer
 from src.guardrails import mask_pii, scrub
-from src.mcp_servers.common import CALENDAR_DB, TASKS_DB, connect, get_employee, load_seed, reset_all
+from src.mcp_servers.common import get_employee, reset_all
 from src.memory import sqlite_store
 from src.tools import open_toolbox
 
@@ -37,17 +39,20 @@ st.set_page_config(page_title="MeetingOps Agent", page_icon="🗂️", layout="w
 # ── 그래프 실행 ──────────────────────────────────────────
 
 
-async def _invoke(payload, thread_id: str) -> dict:
+async def _invoke(payload, thread_id: str) -> tuple[dict, dict | None]:
     async with sqlite_checkpointer() as saver, sqlite_store() as store, open_toolbox() as tb:
         graph = build_graph(saver, store)
-        return await graph.ainvoke(payload, run_config(thread_id, tb))
+        result = await graph.ainvoke(payload, run_config(thread_id, tb))
+        # 실행이 끝났으면 열려 있는 MCP 연결로 업무·일정을 한 번만 조회해 둔다 (화면을 다시 그릴 때 서버를 또 띄우지 않게)
+        snapshot = None if "__interrupt__" in result else await _snapshot(tb, result)
+        return result, snapshot
 
 
 def run_graph(payload) -> None:
-    """그래프를 실행하고 결과를 세션에 담는다. 검토 대기면 interrupt 내용을, 끝나면 최종 상태를 저장한다."""
+    """그래프를 실행하고 결과를 세션에 담는다. 검토 대기면 interrupt 내용을, 끝나면 최종 상태와 조회 결과를 저장한다."""
     try:
         with st.spinner("Agent 실행 중… (MCP 서버 연결과 LLM 호출로 10~40초 걸립니다)"):
-            result = asyncio.run(_invoke(payload, st.session_state.thread_id))
+            result, snapshot = asyncio.run(_invoke(payload, st.session_state.thread_id))
     except Exception as e:  # 오류 메시지도 출력물이라 PII를 지운다
         st.session_state.error = scrub(f"{type(e).__name__}: {e}")
         return
@@ -58,6 +63,7 @@ def run_graph(payload) -> None:
     else:
         st.session_state.pending = None
         st.session_state.final = result
+        st.session_state.snapshot = snapshot
 
 
 def start(request: str) -> None:
@@ -71,7 +77,58 @@ def resume(answer: str, label: str | None = None) -> None:
     run_graph(Command(resume=answer))
 
 
-# ── DB 변경 (시드 대비) ──────────────────────────────────
+# ── 업무·일정 조회 (MCP: list_tasks, list_events) ────────
+
+CALENDAR_DAYS = 14  # 기준일이 속한 주의 월요일부터 2주
+EVENT_TYPES = {"meeting": "회의", "vacation": "휴가", "leave": "휴직", "training": "교육", "work": "작업"}
+WEEKDAYS = "월화수목금토일"
+
+
+def _dump(obj):
+    return obj.model_dump(mode="json") if hasattr(obj, "model_dump") else obj
+
+
+def _calendar_range(state: dict) -> tuple[date, date]:
+    """일정 등록이면 그 날짜, 아니면 회의 날짜(없으면 오늘)가 속한 주의 월요일부터 2주."""
+    event = _dump(state.get("event")) or {}
+    base = event.get("date") or (state.get("meeting_meta") or {}).get("date")
+    day = date.fromisoformat(base[:10]) if base else date.today()
+    monday = day - timedelta(days=day.weekday())
+    return monday, monday + timedelta(days=CALENDAR_DAYS - 1)
+
+
+def _people(state: dict) -> set[str]:
+    """캘린더에 보여 줄 사람: 이번 할 일 담당자와 일정 참석자 (전 직원 일정을 한꺼번에 보여 주지 않는다)."""
+    ids = {a["assignee_id"] for a in map(_dump, state.get("action_items") or [])
+           if a.get("assignee_id") and not a.get("excluded")}
+    ids |= set((_dump(state.get("event")) or {}).get("attendee_ids") or [])
+    return ids
+
+
+async def _snapshot(tb, state: dict) -> dict:
+    """실행이 끝난 직후의 업무 목록과 관련 기간 일정. 실패해도 화면은 계속 보이게 오류만 담는다."""
+    start, end = _calendar_range(state)
+    try:
+        tasks = (await tb.call("list_tasks", {}))["tasks"]
+        calendar = await tb.call("list_events", {"start": start.isoformat(), "end": end.isoformat()})
+    except Exception as e:  # noqa: BLE001 - 조회 실패가 결과 화면 전체를 막지 않게
+        return {"error": scrub(str(e))}
+    return {"tasks": tasks, "calendar": calendar, "people": sorted(_people(state))}
+
+
+def parse_registered(lines: list[str]) -> dict[str, dict]:
+    """Executor 처리 결과 문장에서 이번 실행으로 바뀐 업무·일정 ID와 변경 종류를 뽑는다."""
+    out = {}
+    for line in lines:
+        if m := re.match(r"(T-\d+) 기한 변경 (\S+) → (\S+)", line):
+            out[m[1]] = {"change": "기한 변경", "detail": f"{m[2]} → {m[3]}"}
+        elif m := re.match(r"(T-\d+) 기존 업무와 기한 같음", line):
+            out[m[1]] = {"change": "변경 없음", "detail": "기존 업무와 기한 같음"}
+        elif m := re.match(r"(T-\d+) '", line):
+            out[m[1]] = {"change": "신규", "detail": ""}
+        elif m := re.match(r"(C-\d+) 일정", line):
+            out[m[1]] = {"change": "신규", "detail": ""}
+    return out
 
 
 def _name(emp_id: str) -> str:
@@ -79,35 +136,57 @@ def _name(emp_id: str) -> str:
     return f"{emp.get('name', emp_id)} {emp.get('title', '')}".strip()
 
 
-def db_changes() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """시드 상태와 비교해 새로 생기거나 바뀐 업무·일정."""
-    seed_tasks = {t["id"]: t for t in load_seed("tasks.json")["tasks"]}
-    seed_events = {e["id"] for e in load_seed("calendar.json")["events"]}
-    with connect(TASKS_DB) as conn:
-        tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY id")]
-    with connect(CALENDAR_DB) as conn:
-        events = [dict(r) for r in conn.execute("SELECT * FROM events ORDER BY id")]
-
-    task_rows = []
+def task_frame(tasks: list[dict], changed: dict[str, dict], only_changed: bool) -> pd.DataFrame:
+    rows = []
     for t in tasks:
-        old = seed_tasks.get(t["id"])
-        if old is None:
-            change = "신규"
-        elif old.get("due_date") != t["due_date"]:
-            change = f"기한 변경 ({old.get('due_date')} → {t['due_date']})"
-        else:
+        mark = changed.get(t["id"])
+        if only_changed and not mark:
             continue
-        task_rows.append({"업무": t["id"], "제목": t["title"], "담당": _name(t["assignee_id"]),
-                          "기한": t["due_date"] or "없음", "변경": change})
-    event_rows = [{"일정": e["id"], "제목": e["title"], "시작": e["start"], "종료": e["end"]}
-                  for e in events if e["id"] not in seed_events]
-    return pd.DataFrame(task_rows), pd.DataFrame(event_rows)
+        rows.append({
+            "이번 실행": {"신규": "🆕 신규", "기한 변경": "✏️ 기한 변경", "변경 없음": "· 변경 없음"}.get(
+                (mark or {}).get("change"), ""),
+            "업무": t["id"], "제목": t["title"], "담당": _name(t["assignee_id"]),
+            "기한": t["due_date"] or "없음", "변경 내용": (mark or {}).get("detail", ""),
+            "상태": t["status"], "출처": t.get("source") or "",
+        })
+    df = pd.DataFrame(rows)
+    if not df.empty and not only_changed:  # 전체 보기에서도 이번 실행 항목을 맨 위로
+        df = df.sort_values("이번 실행", key=lambda s: s.eq(""), kind="stable")
+    return df
+
+
+def _when(e: dict) -> str:
+    s, t = datetime.fromisoformat(e["start"]), datetime.fromisoformat(e["end"])
+    if s.date() == t.date():
+        day = f"{s:%m/%d}({WEEKDAYS[s.weekday()]})"
+        return day if (s.hour, s.minute, t.hour, t.minute) == (0, 0, 23, 59) else f"{day} {s:%H:%M}~{t:%H:%M}"
+    return f"{s:%m/%d}({WEEKDAYS[s.weekday()]}) ~ {t:%m/%d}({WEEKDAYS[t.weekday()]})"
+
+
+def event_frame(calendar: dict, people: set[str], changed: dict[str, dict]) -> pd.DataFrame:
+    rows = []
+    for e in calendar.get("events", []):
+        related = sorted(set(e["attendees"]) & people)
+        if not related and e["id"] not in changed:
+            continue  # 이번 회의와 관계없는 사람의 일정은 보여 주지 않는다
+        absent = e["type"] in ("vacation", "leave", "training")
+        rows.append({
+            "표시": "🆕 이번 등록" if e["id"] in changed else ("⚠ 담당자 부재" if absent else ""),
+            "일시": _when(e), "일정": e["title"], "유형": EVENT_TYPES.get(e["type"], e["type"]),
+            "관련 인원": ", ".join(_name(i) for i in (related or e["attendees"])),
+            "일정 ID": e["id"],
+        })
+    for h in calendar.get("holidays", []):
+        d = date.fromisoformat(h)
+        rows.append({"표시": "", "일시": f"{d:%m/%d}({WEEKDAYS[d.weekday()]})", "일정": "공휴일", "유형": "공휴일",
+                     "관련 인원": "", "일정 ID": ""})
+    return pd.DataFrame(rows)
 
 
 # ── 화면: 입력 ───────────────────────────────────────────
 
 
-for key, default in {"thread_id": None, "pending": None, "final": None, "error": None, "history": []}.items():
+for key, default in {"thread_id": None, "pending": None, "final": None, "snapshot": None, "error": None, "history": []}.items():
     st.session_state.setdefault(key, default)
 
 with st.sidebar:
@@ -230,18 +309,45 @@ def render_final(state: dict) -> None:
     for f in failed:
         st.error(f)
 
-    tab_report, tab_db = st.tabs(["요약 보고서", "업무·일정 DB 변경"])
+    snap = st.session_state.get("snapshot") or {}
+    changed = parse_registered(registered)
+    task_ids = [i for i in changed if i.startswith("T-")]
+    tab_tasks, tab_cal, tab_report = st.tabs(
+        [f"업무 ({len(task_ids)}건 처리)", "캘린더", "요약 보고서"])
+
+    with tab_tasks:
+        if snap.get("error"):
+            st.warning(f"업무 목록을 불러오지 못했습니다: {snap['error']}")
+        else:
+            st.caption("업무관리 시스템(task-server)에서 승인 직후 다시 조회한 결과입니다.")
+            mine = task_frame(snap.get("tasks", []), changed, only_changed=True)
+            if mine.empty:
+                st.write("이번 실행에서 등록·변경한 업무가 없습니다.")
+            else:
+                st.dataframe(mine, hide_index=True, width="stretch")
+            with st.expander(f"전체 업무 보기 ({len(snap.get('tasks', []))}건)"):
+                st.dataframe(task_frame(snap.get("tasks", []), changed, only_changed=False),
+                             hide_index=True, width="stretch")
+
+    with tab_cal:
+        if snap.get("error"):
+            st.warning(f"일정을 불러오지 못했습니다: {snap['error']}")
+        else:
+            cal = snap.get("calendar", {})
+            start, end = cal.get("range", ["", ""])
+            people = set(snap.get("people", []))
+            st.caption(f"캘린더(calendar-server)에서 조회한 {start} ~ {end} 일정입니다. "
+                       "이번 할 일 담당자·일정 참석자와 관련된 일정만 보여 줍니다.")
+            events = event_frame(cal, people, changed)
+            if events.empty:
+                st.write("이 기간에 관련 일정이 없습니다.")
+            else:
+                st.dataframe(events, hide_index=True, width="stretch")
+            if people:
+                st.caption("대상: " + ", ".join(_name(p) for p in sorted(people)))
+
     with tab_report:
         st.markdown(state.get("report", ""))
-    with tab_db:
-        tasks, events = db_changes()
-        st.caption("data/seed 상태와 비교한 변경입니다. 다른 회의록을 이어서 처리했다면 그 결과도 함께 보입니다.")
-        if tasks.empty and events.empty:
-            st.write("변경 없음")
-        if not tasks.empty:
-            st.dataframe(tasks, hide_index=True, width="stretch")
-        if not events.empty:
-            st.dataframe(events, hide_index=True, width="stretch")
 
 
 pending = st.session_state.pending
