@@ -21,13 +21,17 @@
 ### 사용 시나리오
 ```
 사용자: (회의록 붙여넣기) "11/2 주간 개발회의 회의록입니다. 정리해서 등록해줘"
-Agent : 결정 사항 3건, 할 일 5건을 찾았습니다.
-        1) 로그인 API 응답 지연 원인 분석 — 담당: 김OO 책임 — 마감: 2026-11-06
-        2) ... (담당자 불명확: "QA 쪽" → 후보 2명)
-        ⚠ 4번 할 일은 10/26 회의의 할 일과 중복될 수 있습니다.
-        수정할 내용이 있나요? [승인 / 수정 / 취소]
-사용자: 2번 담당자는 박OO으로, 나머지는 승인
-Agent : 5건 등록 완료. 회의 요약 보고서를 생성했습니다.
+Agent : 결정 사항 3건, 할 일 8건을 찾았습니다.
+        ⚠ 위젯 12개 확대는 9/10 디자인 리뷰의 "최대 8개" 결정과 충돌합니다.
+        A3) 로그인 캐시 운영 반영 마무리 — 담당: 김민준 책임 — 마감: 2026-11-06
+            ⚠ 10/26 회의의 기존 업무 T-032와 중복 의심 → 기존 업무 기한 변경
+        A8) 알림 센터 회귀 테스트 시나리오 추가 — 담당 미정 ("QA 쪽" → 후보 4명)
+        ...
+        승인 / 거절 / 수정할 내용을 입력하세요.
+사용자: A8 담당자는 박소율로
+Agent : [A8] 담당자 → 박소율 선임(QA팀). 이대로 반영할까요?
+사용자: yes → (검토 표를 다시 확인한 뒤) 승인
+Agent : 신규 5건 등록, T-022 기한 변경. 회의 요약 보고서를 만들었습니다.
 ```
 
 ---
@@ -45,7 +49,7 @@ Agent : 5건 등록 완료. 회의 요약 보고서를 생성했습니다.
 **제외 (확장 후보)**
 - 음성 파일을 텍스트로 변환(STT)
 - 실제 사내 시스템 연동 (Jira, Outlook 등)
-- 웹 UI (MVP는 CLI 또는 노트북으로 진행, 여유가 있으면 Streamlit)
+- 웹 서비스 형태의 UI·다중 사용자 (데모용 Streamlit 화면 `app.py`는 M9에서 만듦)
 
 ---
 
@@ -71,7 +75,7 @@ flowchart TD
     S -->|검토 준비 완료| H[HITL 검토<br/>interrupt]
     H -->|수정| ED[수정 해석 → 확인 interrupt]
     ED -->|반영 후 다시 검토| H
-    H -->|취소| OUT
+    H -->|취소| M
     H -->|승인| X[Executor Agent<br/>업무·캘린더 등록]
     X --> M[장기 기억 갱신]
     M --> OUT[요약 보고서<br/>PII 재검사]
@@ -79,6 +83,7 @@ flowchart TD
 
 - 실제 그래프는 모든 작업 노드가 Supervisor로 돌아오는 구조이고, 위 화살표는 Supervisor가 고르는 순서를 나타냅니다
 - 입력 가드레일에서 차단(길이 초과)되면 바로 요약 보고서로 갑니다
+- 취소(거절)해도 장기 기억 갱신을 거칩니다. 사용자가 확인한 수정은 승인 여부와 관계없이 학습합니다(4.6)
 
 ### 3.2 Agent 역할 (Supervisor 패턴, Day6)
 
@@ -89,7 +94,7 @@ flowchart TD
 | **Planner** | 의도에 맞춰 처리 단계 결정 (Day7 Planning). 지금은 규칙 기반이고, 회의 날짜도 규칙으로 찾음 | — |
 | **Extractor** | 결정 사항, 할 일, 미결 이슈를 구조화 출력으로 추출. 원문 근거 문장 포함 | — |
 | **Context** | 과거 회의록에서 관련 결정을 찾고, 기존 업무와 중복되는 할 일을 검토 전에 찾음 | `search_past_meetings` (RAG), `find_duplicate_task` |
-| **Resolver** | 담당자 표현을 실제 직원으로 매칭하고, 상대 날짜를 실제 날짜로 변환. 휴가·휴직과 기존 업무 확인. 기한을 마일스톤으로 계산하면 근거 회의록을 찾아 붙임 | `find_employee`, `get_team_members`, `check_availability`, `list_tasks`, `resolve_date`, `search_past_meetings` |
+| **Resolver** | 담당자 표현을 실제 직원으로 매칭하고, 상대 날짜를 실제 날짜로 변환. 휴가·휴직과 기존 업무 확인. 기한을 마일스톤으로 계산하면 근거 회의록을 찾아 붙임. 담당자를 확정한 뒤 그 사람의 진행 중 업무와 중복을 한 번 더 확인(M8, 제목 표현이 달라 Context가 놓친 중복 보완) | `find_employee`, `get_team_members`, `check_availability`, `list_tasks`, `resolve_date`, `search_past_meetings` |
 | **Scheduler** | 일정 등록 요청에서 일정 정보를 뽑고 참석자·날짜·가용성 확정 (intent=schedule) | `find_employee`, `get_team_members`, `resolve_date`, `check_availability` |
 | **Executor** | 승인된 항목만 등록하거나 기존 업무의 기한을 변경 | `create_task`, `update_task`, `create_event` |
 
@@ -177,10 +182,10 @@ class MeetingState(TypedDict):
 
 ### 4.2 과거 회의록 RAG — Day2
 - 데이터: `data/past_meetings/` 모의 회의록 15~20개
-- 처리: 회의 단위 메타데이터(날짜, 팀, 회의명) + 안건 단위 청크 분할. Action Items 표는 행마다 청크 하나로 나눕니다(표 전체를 한 청크로 두면 서로 다른 할 일이 섞여 Context Precision이 낮았음, M8에서 3회 평균 0.78 → 0.865)
+- 처리: 회의 단위 메타데이터(출처 파일, 날짜, 회의명, 참석자) + 안건 단위 청크 분할. 청크 앞에 `[날짜 회의명 · 구역]` 머리말을 붙입니다. Action Items 표는 행마다 청크 하나로 나눕니다(표 전체를 한 청크로 두면 서로 다른 할 일이 섞여 Context Precision이 낮았음, M8에서 3회 평균 0.78 → 0.865)
 - 결정 충돌 경고는 "2026-09-10 메인 대시보드 디자인 리뷰(20260910_design_review.md) 결정 사항: 위젯은 사용자당 최대 8개로 제한"처럼 날짜·회의명·출처 파일·구역을 문장에 넣습니다. 같은 파일의 청크가 여럿 검색되면 결정 문장과 가장 많이 겹치는 청크를 출처로 씁니다
 - 저장소: Chroma (로컬)
-- 품질 개선: 메타데이터 필터(같은 팀, 최근 N주), MMR, 필요하면 재정렬
+- 품질 개선: 메타데이터 필터는 "지금 회의 날짜 이전"(`before`)만 씁니다(미래 회의록이 섞이지 않게). MMR은 평가 옵션(`run_ragas --mmr`)으로 비교했고 Agent는 유사도 검색을 씁니다. 팀 필터·재정렬은 쓰지 않습니다(회의록 15건 규모에서 필요 없었음)
 - 품질 측정: RAGAS와 Hit@k로 검색과 경고 문구를 평가 (5.3 참고)
 - 용도: "이전 회의에서 이미 정한 사항" 표시, 중복 할 일 탐지
 
@@ -207,6 +212,7 @@ class MeetingState(TypedDict):
   - 팀 단위 담당자("QA 쪽")는 고르지 않고, 회의에 참석한 팀원을 참고 정보로 보여 줍니다
 - `create_task`는 휴직자에게 배정하면 거부합니다. 삭제·완료 처리 도구는 두지 않습니다
 - `find_duplicate_task`는 글자 bigram 유사도로 **후보만** 찾습니다. 실제 중복인지는 Context Agent가 판단하고 HITL에서 확인합니다
+  - 제목 표현이 조금만 달라도 후보에서 빠질 수 있어(M8, "이메일 템플릿 마감" ↔ T-026 "이메일 다이제스트 템플릿 디자인"), Resolver가 담당자를 확정한 뒤 그 사람의 진행 중 업무(`list_tasks`)를 낮은 기준(0.3)으로 후보로 골라 Context와 같은 LLM 판단을 한 번 더 거칩니다
 - `resolve_date`, `search_past_meetings`는 MCP가 아닌 로컬 도구입니다 (`src/tools.py`)
 
 - Agent 쪽은 `langchain-mcp-adapters`로 도구를 불러옵니다
@@ -262,11 +268,11 @@ LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI�
 - 학습한 값은 **판단을 돕는 근거**로만 씁니다. 그 값으로 정한 항목에는 "이전 수정 기록으로 판단 → 확인 필요" 경고를 붙여 HITL에서 확인받습니다. 판단 우선순위: 후보 1명 > 참석자 명단 > 이전 수정 기록 > LLM 맥락 판단
 - 기본 기한도 제안일 뿐이라 경고를 붙입니다 (4.4절 "기한을 임의로 채우지 않는다"는 원칙 유지)
 - 그래프 마지막 단계의 `memory` 노드가 반영된 수정(`edits_applied`)을 저장합니다. 승인·거절과 관계없이 사용자가 확인한 수정이면 저장합니다
-- **평가 러너는 케이스마다 빈 `InMemoryStore`를 씁니다.** 앞 케이스의 학습이 뒤 케이스 판정에 섞이지 않게 하기 위해서입니다
+- **평가 러너는 실행마다 결과 폴더에 새 SQLite Store를 만들고, 케이스마다 `user_id`를 다르게(`eval-<thread_id>`) 줍니다.** 개발 중 쌓인 기억이 끼어들지 않고, 앞 케이스의 학습이 뒤 케이스 판정에 섞이지 않게 하기 위해서입니다
 - 관리: `python -m src.memory list | set-pref default_due_days 7 | set-term SOP2 "스마트오피스 포털 v2" | forget-alias "QA 쪽"`
 
 ### 4.7 관측 — Day4-2, Day7
-외부 추적 서비스(LangSmith 등)는 쓰지 않고, LangChain 콜백(`BaseCallbackHandler`)으로 실행 기록을 로컬 **`trace.jsonl`** 파일에 남깁니다. 계정 없이 동작하고, 평가 러너가 같은 파일에서 도구 호출을 읽어 판정합니다.
+외부 추적 서비스(LangSmith 등)는 쓰지 않고, LangChain 콜백(`BaseCallbackHandler`)으로 실행 기록을 로컬 **`trace.jsonl`** 파일에 남깁니다. 계정 없이 동작하고, 평가 러너가 같은 파일에서 도구 호출을 읽어 판정하며 실행 중 오류 수를 세어 오염된 결과를 경고합니다.
 
 - 구현: `src/tracing.py`의 `JsonlTraceHandler(BaseCallbackHandler)`
 - 연결: 그래프 실행 시 `config={"callbacks": [handler], "configurable": {"thread_id": ...}}`로 넘기면 노드, LLM, 도구 호출까지 모두 전달됩니다
@@ -281,16 +287,18 @@ LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI�
 | `on_chat_model_start` / `on_llm_end` | `llm_start` / `llm_end` | `model`, `latency_ms`, `input_tokens`, `output_tokens` |
 | `on_tool_start` / `on_tool_end` | `tool_start` / `tool_end` | `tool`, `args`, `latency_ms` |
 | `on_chain_error` / `on_llm_error` / `on_tool_error` | `error` | `name`, `error_type`, `message` |
-| `on_chain_error` (`GraphInterrupt`) | `interrupt` | `node` (HITL 검토 대기. 오류가 아니므로 따로 기록 → 평가 러너가 "등록 전 검토 요청" 판정에 사용) |
+| `on_chain_error` (`GraphInterrupt`) | `interrupt` | `node` (HITL 검토 대기. 오류가 아니므로 `error`와 따로 기록해 집계에 "검토 대기 N회"로 표시) |
 
 - 그래프 실행 config는 `run_config(thread_id, toolbox)`로 만들며, 기본으로 `JsonlTraceHandler(trace_id=thread_id)`가 붙습니다
 - 실패한 도구 호출(`error`)은 "호출됨"으로 치지 않습니다. `tools_called()`는 `tool_end`만 셉니다
+- "등록 전 검토 요청" 판정은 trace가 아니라, 평가 러너가 그래프 결과의 `__interrupt__`를 직접 기록한 검토 이력(`hitl`)으로 합니다
 
-- 모든 줄의 공통 필드: `ts`, `trace_id`(실행 1건 = 그래프 `thread_id`), `run_id`, `parent_run_id`
+- 모든 줄의 공통 필드: `ts`, `trace_id`(실행 1건 = 그래프 `thread_id`. CLI·화면은 8자리 hex, 평가 러너는 `tq01-<실행시각>`), `run_id`, `parent_run_id`
+- `args`, `output`은 마스킹한 뒤 500자로 자른 **문자열**입니다
 - 노드 이벤트는 LangGraph 노드(메타데이터 `langgraph_node`가 있는 체인)만 남기고, 내부 체인은 건너뜁니다
 
 ```json
-{"ts":"2026-11-09T10:21:03.412+09:00","trace_id":"20261102_weekly-1","run_id":"…","parent_run_id":"…","event":"tool_end","tool":"find_employee","args":{"name":"김민준"},"output":"[{\"id\":\"E006\",…}]","latency_ms":84}
+{"ts":"2026-11-05T13:04:51.676+09:00","trace_id":"tq01-20261105_130417","run_id":"…","parent_run_id":"…","event":"tool_end","tool":"find_employee","args":"{\"name\": \"이서연 선임\"}","output":"{\n  \"query\": \"이서연 선임\",\n  \"matches\": [ … (500자에서 자름)","latency_ms":…}
 ```
 
 **기록 규칙**
@@ -349,7 +357,7 @@ LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI�
 - 평가 러너는 케이스마다 업무·일정 DB를 `data/seed/`로 초기화합니다. 앞 케이스에서 등록한 업무가 뒤 케이스의 중복 판정에 섞이지 않게 하기 위해서입니다
 
 ### 5.1 평가셋
-1차 평가(M7)는 `data/samples/` 회의록 5건(할 일 22개)의 정답을 `evaluation/dataset/meetings/gold.json`에 옮겨 사용합니다(정답 원본은 `data/README.md`). Router 의도 정답은 `evaluation/dataset/routing.jsonl`(test_queries 20건)입니다. 5건은 계획한 규모보다 작으므로, 아래 구성의 **15~20건**까지 회의록과 정답을 같은 형식으로 늘려 갑니다.
+1차 평가(M7)는 `data/samples/` 회의록 5건(할 일 22개)의 정답을 `evaluation/dataset/meetings/gold.json`에 옮겨 사용합니다(정답 원본은 `data/README.md`). Router 의도 정답은 `evaluation/dataset/routing.jsonl`(test_queries 20건)입니다. 5건은 계획한 규모(아래 구성의 **15~20건**)보다 작습니다. M9까지 늘리지 못했고, 한 건이 지표를 약 5%p 움직인다는 한계를 평가 보고서에 적었습니다. 늘릴 때는 같은 형식으로 `gold.json`에 추가합니다.
 
 | 유형 | 건수 | 확인할 점 |
 |---|---|---|
@@ -389,10 +397,12 @@ LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI�
 
 ```json
 {"id": "R01",
- "query": "대시보드 위젯 최대 개수를 12개로 확대",
+ "type": "decision_conflict",
+ "query": "대시보드 위젯 최대 개수를 12개로 늘리고 지연 로딩 적용",
  "source_sample": "20261102_weekly.md",
+ "before": "2026-11-02",
  "reference_sources": ["20260910_design_review.md"],
- "reference": "9/10 디자인 리뷰에서 메인 대시보드 위젯을 사용자당 최대 8개로 제한하기로 결정했다."}
+ "reference": "9/10 디자인 리뷰에서 메인 대시보드 위젯을 사용자당 최대 8개로 제한하기로 결정했다. …"}
 ```
 
 | 유형 | 건수 | 예시 |
@@ -430,25 +440,29 @@ from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import Faithfulness, LLMContextPrecisionWithReference, LLMContextRecall
 
-samples = [
-    {
-        "user_input": row["query"],
-        "retrieved_contexts": [d.page_content for d in retriever.invoke(row["query"])],
-        "response": context_agent_warning(row["query"]),   # Context Agent가 만든 경고 문구
-        "reference": row["reference"],
-    }
-    for row in load_jsonl("evaluation/dataset/retrieval.jsonl")
-]
+rows = load_jsonl("evaluation/dataset/retrieval.jsonl")
+llm, emb = LangchainLLMWrapper(get_llm()), LangchainEmbeddingsWrapper(get_embeddings())
 
-result = evaluate(
-    dataset=EvaluationDataset.from_list(samples),
-    metrics=[LLMContextPrecisionWithReference(), LLMContextRecall(), Faithfulness()],
-    llm=LangchainLLMWrapper(get_llm()),
-    embeddings=LangchainEmbeddingsWrapper(get_embeddings()),
-)
+# 1) Context Precision / Recall: 정답 회의록이 있는 질의 16건
+ctx = [{
+    "user_input": ragas_question(r["query"]),          # "과거 회의록에서 다음 내용과 관련된 … 무엇인가? 내용: …"
+    "retrieved_contexts": [f"({d.metadata['source']}) {d.page_content}"
+                           for d in search_past_meetings(r["query"], k=4, before=r["before"])],
+    "reference": r["reference"],
+} for r in rows if r["reference_sources"]]
+evaluate(EvaluationDataset.from_list(ctx),
+         metrics=[LLMContextPrecisionWithReference(), LLMContextRecall()], llm=llm, embeddings=emb)
+
+# 2) Faithfulness: 결정 충돌 4건 + 관련 회의록 없음 2건에서 Context Agent와 같은 프롬프트로 만든 경고
+#    (경고가 없는 질의는 빼고, 관련 회의록 없음 질의에 경고가 생기면 오경고로 셈)
+warn = [{"user_input": ragas_question(r["query"]), "retrieved_contexts": chunks, "response": "\n".join(warnings)}
+        for r in rows if r["type"] in ("decision_conflict", "no_relevant")
+        for warnings, chunks in [conflict_warnings(r)] if warnings]
+evaluate(EvaluationDataset.from_list(warn), metrics=[Faithfulness()], llm=llm, embeddings=emb)
 ```
 
-- 결과는 `evaluation/results/ragas_<날짜>_<설정명>.json`으로 저장해 설정별로 비교합니다
+- 결과는 `evaluation/results/ragas_<실행시각>_<설정명>.json`(`--ragas`)으로 저장해 설정별로 비교합니다. `--ragas` 없이 돌리면 Hit@k만 재서 `hitk_<실행시각>_<설정명>.json`으로 남깁니다
+- RAGAS 점수는 같은 입력으로도 실행마다 0.06 정도 흔들려, 비교는 3회 평균으로 합니다(M8)
 
 ---
 
@@ -457,7 +471,7 @@ result = evaluate(
 과제 규정 구조를 따릅니다. 
 
 ```
-mini-pjt_jihyeon_kim/             
+mini-pjt/                         # 저장소 루트 (제출 폴더 이름은 과정 규칙을 따름)
 ├── src/                          # 소스코드
 │   ├── agent.py                  # [규정] 메인 에이전트 그래프 (StateGraph 조립, Supervisor 라우팅, HITL)
 │   ├── tools.py                  # [규정] 도메인 도구 (MCP 도구 로딩, resolve_date, search_past_meetings)
@@ -506,7 +520,7 @@ mini-pjt_jihyeon_kim/
 │   │   ├── meetings/gold.json    # 샘플 회의록 5건의 할 일 정답 (기능 지표용)
 │   │   ├── routing.jsonl         # test_queries 20건의 의도 정답
 │   │   └── retrieval.jsonl       # 검색 평가 질의와 정답
-│   ├── tests/                    # pytest (가드레일, 라우팅, 장애 주입)
+│   ├── tests/                    # pytest (도구·날짜 규칙, 가드레일, 기억·추적, 장애 주입, 추출 샘플). 라우팅은 run_eval로 측정
 │   └── results/                  # 실행 결과, 평가별 trace.jsonl (git 제외)
 ├── docs/
 │   └── demo.md                   # 데모 시나리오 (Streamlit 화면 기준, 약 7분)
@@ -533,7 +547,7 @@ mini-pjt_jihyeon_kim/
 flowchart TB
     subgraph L1[인터페이스]
         CLI[CLI]
-        ST[Streamlit<br/>확장]
+        ST[Streamlit<br/>app.py]
     end
     subgraph L3[Agent 오케스트레이션]
         LG[LangGraph<br/>StateGraph · Supervisor · interrupt]
@@ -553,7 +567,7 @@ flowchart TB
     subgraph L6[데이터]
         CH[(Chroma<br/>과거 회의록)]
         SQL[(SQLite<br/>업무 · 일정)]
-        CP[(SqliteSaver<br/>체크포인트)]
+        CP[(AsyncSqliteSaver<br/>체크포인트)]
         STORE[(LangGraph Store<br/>장기 기억)]
     end
     OBS[콜백 추적<br/>trace.jsonl]
@@ -581,7 +595,7 @@ flowchart TB
 | 계층 | 기술 | 역할 | 선택 이유 |
 |---|---|---|---|
 | 언어 | Python 3.14 | 전체 구현 | 수업 실습 환경과 동일 |
-| 인터페이스 | CLI (`argparse`) → Streamlit(확장) | 회의록 입력, HITL 검토 | CLI는 디버깅이 쉽고, Streamlit은 그래프를 직접 호출해 데모 화면을 빨리 만들 수 있음 |
+| 인터페이스 | CLI (`argparse`), Streamlit (`app.py`, M9) | 회의록 입력, HITL 검토 | CLI는 디버깅이 쉽고, Streamlit은 그래프를 직접 호출해 데모 화면을 빨리 만들 수 있음 |
 | 오케스트레이션 | **LangGraph** | 상태 그래프, Supervisor 라우팅, `interrupt` | 조건 분기, 반복, 중단·재개가 필요한 흐름이라 체인보다 그래프가 맞음 (Day3, Day6) |
 | 체인 구성 | **LangChain** (LCEL) | 프롬프트, 구조화 출력, 검색기 | 노드 내부의 단일 LLM 작업 구성 (Day1) |
 | LLM | Claude Sonnet 4.5 on **Amazon Bedrock** | 추출, 라우팅, 판단 | 수업 제공 모델. `langchain-aws`의 `ChatBedrockConverse`로 연동 |
@@ -589,12 +603,12 @@ flowchart TB
 | 도구 표준 | **MCP** (FastMCP) + `langchain-mcp-adapters` | 조직도, 업무, 캘린더 도구 | 사내 시스템을 표준 방식으로 연결, Agent 코드와 분리 (Day4) |
 | 벡터 저장소 | Chroma (로컬 파일) | 과거 회의록 검색 | 별도 서버 없이 실행, 메타데이터 필터 지원 (Day2) |
 | 업무 데이터 | SQLite | 모의 업무·일정 DB | 파일 하나로 동작, `data/seed/`에서 초기 적재 |
-| 체크포인트 | `SqliteSaver` | 그래프 상태 저장, HITL 재개 | 프로그램을 다시 실행해도 검토 대기 중인 실행을 이어갈 수 있음 |
+| 체크포인트 | `AsyncSqliteSaver` | 그래프 상태 저장, HITL 재개 | 프로그램을 다시 실행해도 검토 대기 중인 실행을 이어갈 수 있음 |
 | 장기 기억 | LangGraph `Store` | 호칭 매핑, 사용자 설정 | 그래프 노드에서 바로 읽고 쓸 수 있음 (Day7) |
 | 관측 | `BaseCallbackHandler` → `trace.jsonl` | 노드·LLM·도구 호출 기록, 지연 시간, 토큰 | 외부 계정 없이 로컬 파일로 남고, 평가 러너가 도구 호출 판정에 그대로 사용 (Day4-2, Day7) |
 | RAG 평가 | **RAGAS** + Hit@k | 검색 품질, 경고 문구의 근거 검증 | RAG 표준 지표로 검색 설정 변경 효과를 수치로 비교 (Day2-6, Day7-4) |
 | 설정 | `python-dotenv` | 모델 ID, 경로, 키 관리 | `.env` 하나로 환경 전환 |
-| 테스트 | pytest | 가드레일, 라우팅, 장애 주입 테스트 | |
+| 테스트 | pytest | 도구·날짜 규칙, 가드레일, 기억·추적, 장애 주입, 추출 샘플 | 라우팅은 pytest가 아니라 `run_eval --only routing`으로 측정 |
 
 ### 7.3 HITL 실행 흐름
 
@@ -602,17 +616,19 @@ flowchart TB
 
 ```python
 # src/cli.py (요약)
-config = {"configurable": {"thread_id": run_id}}
+async with sqlite_checkpointer() as saver, sqlite_store() as store, open_toolbox() as tb:
+    graph = build_graph(saver, store)
+    config = run_config(thread_id, tb)                    # thread_id, Toolbox, trace 핸들러
 
-result = graph.invoke({"raw_minutes": minutes}, config)   # HITL 지점에서 멈춤
-while "__interrupt__" in result:
-    review = result["__interrupt__"][0].value             # 검토 표 (할 일, 경고)
-    print_review(review)
-    decision = ask_user()                                 # approve / edit / reject
-    result = graph.invoke(Command(resume=decision), config)
+    result = await graph.ainvoke({"request": mask_pii(request)[0]}, config)   # HITL 지점에서 멈춤
+    while "__interrupt__" in result:
+        review = result["__interrupt__"][0].value         # 검토 표 (할 일, 경고) 또는 수정 확인
+        print_review(review)
+        decision = input("> ")                            # approve / reject / 수정 문장 / yes·no
+        result = await graph.ainvoke(Command(resume=decision), config)
 ```
 
-Streamlit도 같은 방식입니다. `thread_id`를 `st.session_state`에 저장하고 버튼을 누를 때 `Command(resume=...)`를 호출합니다.
+Streamlit(`app.py`)도 같은 방식입니다. `thread_id`를 `st.session_state`에 저장하고, 버튼을 누를 때마다 체크포인터·Store·Toolbox를 열어 `Command(resume=...)`로 재개한 뒤 닫습니다.
 
 **확장: 외부 연동이 필요할 때**
 - 다른 프로그램(웹 프론트엔드, 메신저 봇 등)이 Agent를 호출해야 하면 API를 추가합니다.

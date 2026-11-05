@@ -76,7 +76,8 @@ def build_graph(checkpointer=None, store=None):
     g.add_edge("planner", "supervisor")
     g.add_conditional_edges("supervisor", lambda s: s["next_agent"], [*WORKERS, "report"])
     g.add_edge("report", END)
-    # store가 없으면 장기 기억 없이 동작한다 (평가 러너는 케이스마다 빈 InMemoryStore를 넘긴다)
+    # store가 없으면 장기 기억 없이 동작한다
+    # (평가 러너는 실행마다 새 SQLite Store를 만들고 케이스마다 user_id를 다르게 줘서 기억을 분리한다)
     return g.compile(checkpointer=checkpointer or InMemorySaver(serde=serializer()), store=store)
 
 
