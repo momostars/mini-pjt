@@ -1,0 +1,51 @@
+{
+  "_comment": "기능 지표 정답 (README 5.1절). data/README.md '샘플별 정답과 테스트 의도'를 옮긴 것. assignee는 확정 담당자, candidates는 팀 단위라 확정하면 안 되고 후보로 남겨야 하는 경우. due가 null이면 기한이 없어 비워 둬야 함. needs_hitl은 data/README.md에서 HITL 확인이 필요하다고 표시한 항목.",
+  "meetings": [
+    {
+      "file": "data/samples/20261102_weekly.md",
+      "action_items": [
+        {"no": 1, "title": "운영 이전 리허설 진행", "assignee": "E022", "due": "2026-11-11", "needs_hitl": false},
+        {"no": 2, "title": "리허설 계획서 공유", "assignee": "E022", "due": "2026-11-06", "needs_hitl": false},
+        {"no": 3, "title": "로그인 캐시 운영 반영 마무리", "assignee": "E006", "due": "2026-11-06", "needs_hitl": false},
+        {"no": 4, "title": "로그인 캐시 PR 리뷰", "assignee": "E009", "due": "2026-11-04", "needs_hitl": false},
+        {"no": 5, "title": "대시보드 위젯 최대 12개 확대 + 지연 로딩", "assignee": "E013", "due": "2026-11-13", "needs_hitl": false},
+        {"no": 6, "title": "알림 API 구현 (기한 연장)", "assignee": "E007", "due": "2026-11-12", "needs_hitl": false},
+        {"no": 7, "title": "알림 읽음 처리 버그 확인", "assignee": "E007", "due": null, "needs_hitl": true},
+        {"no": 8, "title": "알림 센터 회귀 테스트 시나리오 추가", "assignee": null, "candidates": ["E018", "E019", "E020"], "due": "2026-11-13", "needs_hitl": true}
+      ]
+    },
+    {
+      "file": "data/samples/20261104_planning.md",
+      "action_items": [
+        {"no": 1, "title": "다이제스트 템플릿 수정 (8시 발송 반영)", "assignee": "E027", "due": "2026-11-06", "needs_hitl": false},
+        {"no": 2, "title": "설정 화면 기획서 보완", "assignee": "E003", "due": "2026-11-05", "needs_hitl": false},
+        {"no": 3, "title": "설정 화면 UI 시안", "assignee": "E028", "due": "2026-11-06", "needs_hitl": false},
+        {"no": 4, "title": "업무 시간 설정 API 스펙 공유", "assignee": "E007", "due": "2026-11-05", "needs_hitl": false},
+        {"no": 5, "title": "설정 화면 프론트 구현", "assignee": "E015", "due": "2026-11-20", "needs_hitl": false},
+        {"no": 6, "title": "오픈 공지에 알림 센터 소개 추가", "assignee": "E002", "due": "2026-11-30", "needs_hitl": false}
+      ]
+    },
+    {
+      "file": "data/samples/20261105_incident_retro.md",
+      "action_items": [
+        {"no": 1, "title": "메시지 중복 방지 로직 적용", "assignee": "E007", "due": "2026-11-10", "needs_hitl": false},
+        {"no": 2, "title": "로그인 이벤트 알림 영향 점검", "assignee": "E006", "due": "2026-11-12", "needs_hitl": true},
+        {"no": 3, "title": "스테이징 메일 화이트리스트 설정", "assignee": null, "candidates": ["E021", "E022", "E023", "E024", "E025"], "due": "2026-11-11", "needs_hitl": true},
+        {"no": 4, "title": "메일 수신 직원 대상 안내 메일 발송", "assignee": "E002", "due": "2026-11-05", "needs_hitl": false},
+        {"no": 5, "title": "회귀 테스트에 중복 발송 확인 항목 추가", "assignee": "E017", "due": null, "needs_hitl": true}
+      ]
+    },
+    {
+      "file": "data/samples/20261109_weekly.md",
+      "action_items": [
+        {"no": 1, "title": "배포 동결 안내 재공지", "assignee": "E025", "due": "2026-11-09", "needs_hitl": false},
+        {"no": 2, "title": "QA 세부 일정표 공유", "assignee": "E017", "due": "2026-11-13", "needs_hitl": false},
+        {"no": 3, "title": "사칭 메일 주의 전사 공지", "assignee": "E030", "due": "2026-11-10", "needs_hitl": false}
+      ]
+    },
+    {
+      "file": "data/samples/20261110_tech_seminar.md",
+      "action_items": []
+    }
+  ]
+}

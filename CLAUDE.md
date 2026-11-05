@@ -28,7 +28,7 @@ python -m src.retriever --ingest          # data/past_meetings를 Chroma에 인�
 python -m src.cli data/samples/20261102_weekly.md
 python -m evaluation.run_test_queries     # 채점용 인-아웃 테스트
 python -m evaluation.run_eval             # 기능 지표
-python -m evaluation.run_ragas            # Hit@k, RAGAS
+python -m evaluation.run_ragas            # Hit@k (--ragas: RAGAS까지)
 pytest evaluation/tests                   # 테스트 하나만: pytest evaluation/tests/test_x.py::test_name
 ```
 

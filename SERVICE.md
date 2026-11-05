@@ -93,7 +93,10 @@
 
 **케이스 판정 방법**
 - 통과 = `expected_traits`를 모두 만족 + `forbidden` 항목이 하나도 없음 + `expected_tools`가 모두 호출됨
-- `expected_traits`는 LLM 채점으로, `forbidden` 문자열과 도구 호출은 코드로 확인한다 (도구 호출 기록은 콜백 추적 파일 `trace.jsonl`의 `tool_end` 이벤트에서 수집)
+- `expected_traits`는 LLM 채점으로, 도구 호출은 코드로 확인한다 (도구 호출 기록은 콜백 추적 파일 `trace.jsonl`의 `tool_end` 이벤트에서 수집)
+- `forbidden`은 코드로 확인할 수 있는 항목은 코드로, 서술형 항목("박소율 선임 배정" 등)은 LLM 채점으로 확인한다
+  - "create_task 호출" 형태 → 도구 호출 기록
+  - 공백 없는 문자열(전화번호, 이메일, 이름) → 보고서·검토 표·등록 결과·DB 변경·trace 전체에서 원문 검색
 - HITL에서 멈추면 평가 러너가 멈췄다는 사실을 기록하고 `approve`로 재개한다. "등록 전 검토 요청"은 이 기록으로 판정한다
 
 **"쓸만하다"를 판단할 지표**

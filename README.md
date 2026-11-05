@@ -344,7 +344,7 @@ LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI�
 - 평가 러너는 케이스마다 업무·일정 DB를 `data/seed/`로 초기화합니다. 앞 케이스에서 등록한 업무가 뒤 케이스의 중복 판정에 섞이지 않게 하기 위해서입니다
 
 ### 5.1 평가셋
-`evaluation/dataset/meetings/`에 정답이 표시된 회의록 **15~20건**을 준비합니다.
+1차 평가(M7)는 `data/samples/` 회의록 5건(할 일 22개)의 정답을 `evaluation/dataset/meetings/gold.json`에 옮겨 사용합니다(정답 원본은 `data/README.md`). Router 의도 정답은 `evaluation/dataset/routing.jsonl`(test_queries 20건)입니다. 5건은 계획한 규모보다 작으므로, 아래 구성의 **15~20건**까지 회의록과 정답을 같은 형식으로 늘려 갑니다.
 
 | 유형 | 건수 | 확인할 점 |
 |---|---|---|
@@ -414,6 +414,8 @@ LangGraph `Store`에 사용자·팀별로 저장합니다 (`src/memory.py`, CLI�
 **실행 구성**
 - 채점 LLM과 임베딩은 Bedrock 모델을 그대로 씁니다 (RAGAS의 LangChain 래퍼로 연결)
 - 채점 모델과 생성 모델이 같아 점수가 후하게 나올 수 있으므로, 일부 항목은 사람이 직접 확인합니다
+- 평가셋 질의는 "위젯 12개로 확대" 같은 새 결정 문장이라, RAGAS의 `user_input`에는 "과거 회의록에서 다음 내용과 관련된 과거 결정·기존 할 일·일정 근거는 무엇인가?"라는 질문으로 바꿔 넣습니다(그대로 넣으면 과거 결정 청크를 "12개 정보가 없다"며 무관하다고 판정함). 청크는 Agent가 보는 형태대로 `(파일명) 본문`으로 넣습니다
+- Faithfulness는 Context Agent의 결정 충돌 경고를 대상으로 합니다(결정 충돌 4건 + 관련 회의록 없음 2건, `python -m evaluation.run_ragas --ragas`)
 - RAGAS는 버전마다 API가 많이 바뀌므로 설치 후 확인한 버전으로 고정합니다
 
 ```python
@@ -659,7 +661,7 @@ def get_embeddings():
 | **M4** 그래프 조립 ✅ | Supervisor + 작업 Agent 연결, 조건부 분기 | `agent.py`, `nodes/` | Day3, Day6 |
 | **M5** 안전장치 ✅ | HITL interrupt, 입력·출력 가드레일 미들웨어 | `guardrails.py` | Day5 |
 | **M6** 기억과 관측 ✅ | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
-| **M7** 1차 자체 평가 | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |
+| **M7** 1차 자체 평가 ✅ | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |
 | **M8** 개선·2차 자체 평가 | 1차 실패 케이스 개선 후 재평가 | `round2_report.md` | Day 10 |
 | **M9** 마무리 | 데모 시나리오, (선택) Dockerfile·run.sh·Streamlit, 발표 자료 | 데모 영상 / 발표 자료 | |
 
@@ -695,7 +697,8 @@ python -m src.cli data/samples/20261102_weekly.md
 # 평가
 python -m evaluation.run_test_queries   # 과제 인-아웃 테스트 (test_queries.csv)
 python -m evaluation.run_eval           # 기능 지표
-python -m evaluation.run_ragas          # RAG 평가
+python -m evaluation.run_ragas          # 검색 평가 (Hit@k, MRR)
+python -m evaluation.run_ragas --ragas  # + RAGAS (Bedrock 호출)
 pytest evaluation/tests
 
 # 추적 집계 (노드 지연 시간, 토큰, 도구 호출 성공률)
