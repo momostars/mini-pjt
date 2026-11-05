@@ -111,6 +111,23 @@ def _reference(name: str, reference_date: str | None) -> tuple[datetime | None, 
     return None, "", None
 
 
+PRONOUNS = {"그", "그날", "이", "저", "해당"}
+
+
+def _missing_reference(base: date, expr: str, text: str) -> dict:
+    """기준 일정을 찾지 못한 결과. 추측하지 않고 사용자에게 물을 수 있게 기준 일정 이름(띄어쓰기 유지)을 담는다."""
+    name = re.sub(r"\s*(\d+\s*(주|일)\s*)?(전날|전)$", "", text).strip()
+    if name in PRONOUNS:  # "그 전날까지"처럼 지시어만 있으면 무엇의 전날인지 알 수 없다
+        result = _result(base, expr, None, f"기준 일정이 지시어('{name}')라 알 수 없음",
+                         note="지시어를 기준 일정 이름으로 바꿔 다시 부르거나 사용자에게 확인")
+        result["reference_name"] = None
+        return result
+    result = _result(base, expr, None, f"기준 일정 '{name}'을 찾지 못함",
+                     note="기준 일정 날짜를 reference_date로 넘기거나 사용자에게 확인")
+    result["reference_name"] = name
+    return result
+
+
 def _with_milestone(result: dict, milestone: dict | None) -> dict:
     result["milestone"] = milestone  # 근거 회의록을 찾을 때 쓴다
     return result
@@ -167,8 +184,7 @@ def resolve_date_rule(expression: str, base_date: str, reference_date: str | Non
     if m := re.fullmatch(r"(.+?)(\d+)(주|일)전", compact):
         ref, source, ms = _reference(m[1], reference_date)
         if ref is None:
-            return _result(base, expr, None, f"기준 일정 '{m[1]}'을 찾지 못함",
-                           note="기준 일정 날짜를 reference_date로 넘기거나 사용자에게 확인")
+            return _missing_reference(base, expr, text)
         days = int(m[2]) * (7 if m[3] == "주" else 1)
         return _with_milestone(
             _result(base, expr, ref.date() - timedelta(days=days), f"{source}에서 {m[2]}{m[3]} 전", note=note), ms
@@ -178,8 +194,7 @@ def resolve_date_rule(expression: str, base_date: str, reference_date: str | Non
         name = m[1]
         ref, source, ms = _reference(name, reference_date)
         if ref is None:
-            return _result(base, expr, None, f"기준 일정 '{name}'을 찾지 못함",
-                           note="기준 일정 날짜를 reference_date로 넘기거나 사용자에게 확인")
+            return _missing_reference(base, expr, text)
         # 시각이 있는 일정(예: 14:00 리허설) '전까지'는 같은 날 일정 전까지. 종일·자정 일정은 전 근무일
         if m[2] == "전" and (ref.hour, ref.minute) != (0, 0):
             return _with_milestone(
@@ -220,6 +235,7 @@ def search_past_meetings(query: str, before: str | None = None, k: int = 4) -> l
         {
             "source": d.metadata["source"],
             "date": d.metadata["date"],
+            "title": d.metadata.get("title", ""),
             "section": d.metadata["section"],
             "score": d.metadata.get("score"),
             "content": d.page_content,
@@ -290,21 +306,53 @@ def _parse_output(out):
     return out
 
 
-class Toolbox:
-    """노드가 도구를 이름으로 부르는 창구. config를 넘겨 콜백 추적(trace)에 도구 호출이 남게 한다."""
+TOOL_TIMEOUT = float(os.getenv("TOOL_TIMEOUT", "15"))  # 도구 1회 호출 제한 시간(초)
+TOOL_RETRIES = 2                                        # 일시 장애 재시도 횟수 (조회 도구만)
+RETRY_BACKOFF = 0.5                                     # 재시도 대기: 0.5초, 1초 …
+# 등록·변경 도구는 재시도하지 않는다. 첫 호출이 실제로는 처리됐는데 응답만 늦은 경우
+# 다시 부르면 같은 업무가 두 번 등록될 수 있다. 실패는 Executor가 실패 목록으로 알린다.
+WRITE_TOOLS = {"create_task", "create_event", "update_task"}
 
-    def __init__(self, tools: list):
+
+def _retryable(e: Exception) -> bool:
+    """일시 장애(연결 끊김, 타임아웃 등)만 다시 시도한다.
+    도구가 정상적으로 오류를 알린 경우(ToolException: 직원 없음 등)와 입력 검증 오류는 다시 해도 같다."""
+    from langchain_core.tools import ToolException
+    from pydantic import ValidationError
+
+    return not isinstance(e, (ToolException, ValidationError))
+
+
+class Toolbox:
+    """노드가 도구를 이름으로 부르는 창구. config를 넘겨 콜백 추적(trace)에 도구 호출이 남게 한다.
+
+    도구 미들웨어 역할도 한다: 인자·결과 PII 마스킹, 호출 제한 시간, 조회 도구의 일시 장애 재시도.
+    """
+
+    def __init__(self, tools: list, timeout: float = TOOL_TIMEOUT, retries: int = TOOL_RETRIES,
+                 backoff: float = RETRY_BACKOFF):
         self.tools = {t.name: t for t in tools}
+        self.timeout, self.retries, self.backoff = timeout, retries, backoff
 
     async def call(self, name: str, args: dict, config=None):
         """도구를 호출한다. 실패하면 ToolCallError(사람이 읽을 메시지)를 낸다."""
         from src.guardrails import scrub  # 도구 미들웨어: 인자와 결과에서 PII 제거
 
-        try:
-            out = await self.tools[name].ainvoke(scrub(args), config=config)
-        except Exception as e:  # MCP 도구 오류(isError), 입력 검증 오류 등
-            raise ToolCallError(scrub(f"{name} 실패: {e}")) from e
-        return scrub(_parse_output(out))
+        if name not in self.tools:
+            raise ToolCallError(f"{name} 실패: 등록되지 않은 도구")
+        attempts = 1 if name in WRITE_TOOLS else 1 + self.retries
+        for attempt in range(1, attempts + 1):
+            try:
+                out = await asyncio.wait_for(self.tools[name].ainvoke(scrub(args), config=config), self.timeout)
+                return scrub(_parse_output(out))
+            except TimeoutError as e:
+                error, cause = f"{self.timeout:g}초 안에 응답이 없음", e
+            except Exception as e:  # MCP 도구 오류(isError), 입력 검증 오류, 연결 오류 등
+                error, cause = str(e), e
+            if attempt == attempts or not _retryable(cause):
+                tried = f" ({attempt}회 시도)" if attempt > 1 else ""
+                raise ToolCallError(scrub(f"{name} 실패: {error}{tried}")) from cause
+            await asyncio.sleep(self.backoff * 2 ** (attempt - 1))
 
 
 @asynccontextmanager

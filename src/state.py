@@ -82,7 +82,7 @@ class MeetingState(TypedDict, total=False):
     edit_problems: list[str]
     edits_applied: list[dict]                            # 반영된 수정 (장기 기억 학습용, M6)
     bulk_confirmed: bool                                 # MAX_BULK건 이상 등록을 따로 승인했는지
-    guard_notes: list[str]                               # 입력 가드레일 안내 (마스킹, 주입 탐지, 우회 요청)
+    guard_notes: list[str]                               # 사용자 안내 (입력 가드레일: 마스킹·주입·우회 요청, Context: 도구 실패)
     injection_detected: bool
     blocked: bool                                        # 입력 가드레일에서 차단 (길이 초과 등)
     validation_errors: list[str]                         # 출력 검증 오류

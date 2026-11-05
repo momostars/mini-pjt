@@ -59,8 +59,36 @@ def test_resolve_date_unknown_reference_asks():
     # 마일스톤에 없는 기준 일정은 추측하지 않는다 ("운영 이전"으로 잘못 잡으면 안 됨)
     r = resolve_date_rule("운영 이전 리허설 전까지", "2026-11-05")
     assert r["date"] is None and r["ambiguous"]
+    assert r["reference_name"] == "운영 이전 리허설"  # 사용자에게 물을 기준 일정 이름 (띄어쓰기 유지)
     # 지시어만 있으면 기준 일정을 알 수 없다
-    assert resolve_date_rule("그 전날까지", "2026-11-02")["date"] is None
+    r = resolve_date_rule("그 전날까지", "2026-11-02")
+    assert r["date"] is None and r["reference_name"] is None
+
+
+def test_unknown_reference_warning_asks_for_reference_date():
+    """기준 일정을 못 찾으면 기한을 추측하지 않고, 그 일정의 날짜를 알려 달라고 경고한다 (M8, 3단계 A안)."""
+    import asyncio
+
+    from src.mcp_servers.common import get_employee, public_employee
+    from src.nodes.resolver import Attendance, _finalize
+    from src.state import ActionItem
+    from src.tools import Toolbox, resolve_date
+
+    class Stub:  # 가용성·기존 업무 조회는 이 테스트와 무관
+        def __init__(self, name, value):
+            self.name, self.value = name, value
+
+        async def ainvoke(self, args, config=None):
+            return self.value
+
+    tb = Toolbox([resolve_date, Stub("check_availability", {"absences": []}), Stub("list_tasks", {"tasks": []})])
+    item = ActionItem(id="A3", title="스테이징 메일 화이트리스트", assignee_raw="장하린 사원", due_raw="운영 이전 리허설 전까지",
+                      evidence="인프라팀에서 운영 이전 리허설 전까지 처리.", confidence=0.9)
+    asyncio.run(_finalize(tb, item, [public_employee(get_employee("E025"))], False, None, "2026-11-05",
+                          Attendance([], []), None, {}, {}))
+    assert item.due_date is None
+    warning = next(w for w in item.warnings if "기준 일정" in w)
+    assert "'운영 이전 리허설' 날짜" in warning and "A3 기한은" in warning
 
 
 def test_resolve_date_moves_off_holiday():
@@ -239,3 +267,49 @@ def test_create_event():
     assert e["id"] == "C-201"
     with pytest.raises(ValueError):
         calendar_server.create_event("잘못된 시각", "2026-11-11T14:00:00+09:00", "2026-11-11T13:00:00+09:00", [])
+
+
+# ── 결정 충돌 경고 문구 (M8): 같은 파일의 청크가 여럿이면 결정이 적힌 구역을 출처로 ──
+
+
+def test_conflict_text_cites_the_chunk_that_holds_the_decision():
+    from src.nodes.context import best_hit, conflict_text
+
+    hits = [
+        {"source": "20260910_design_review.md", "date": "2026-09-10", "title": "메인 대시보드 디자인 리뷰",
+         "section": "논의 내용", "content": "이서연 책임: 위젯이 많아지면 첫 화면 로딩이 느려짐."},
+        {"source": "20260910_design_review.md", "date": "2026-09-10", "title": "메인 대시보드 디자인 리뷰",
+         "section": "결정 사항", "content": "- 메인 대시보드 위젯은 **사용자당 최대 8개**로 제한."},
+        {"source": "20261006_weekly.md", "date": "2026-10-06", "title": "주간 개발회의",
+         "section": "결정 사항", "content": "- 메인 대시보드 위젯은 사용자당 최대 8개로 제한."},
+    ]
+    decision = "메인 대시보드 위젯은 사용자당 최대 8개로 제한"
+    hit = best_hit(hits, "20260910_design_review.md", decision)
+    assert hit["section"] == "결정 사항"  # 다른 파일의 청크는 고르지 않는다
+    assert conflict_text(hit, decision) == (
+        "2026-09-10 메인 대시보드 디자인 리뷰(20260910_design_review.md) 결정 사항: " + decision
+    )
+    assert best_hit(hits, "없는_파일.md", decision) is None  # 검색 결과에 없는 출처는 버린다
+
+
+# ── 같은 담당자 업무와 중복 재확인 (M8): 후보 선택은 코드, 중복 판단은 LLM ──
+
+
+def test_same_owner_candidates_pick_similar_open_tasks_only():
+    from src.nodes.resolver import same_owner_candidates
+    from src.state import ActionItem
+
+    def item(id, title, assignee_id, duplicate_of=None):
+        return ActionItem(id=id, title=title, assignee_raw="", evidence="-", confidence=0.9,
+                          assignee_id=assignee_id, duplicate_of=duplicate_of)
+
+    t026 = {"id": "T-026", "title": "이메일 다이제스트 템플릿 디자인", "assignee_id": "E027", "due_date": "2026-11-05",
+            "status": "todo"}
+    other = {"id": "T-099", "title": "접근성 점검", "assignee_id": "E027", "due_date": "2026-10-30", "status": "todo"}
+    items = [
+        item("A1", "이메일 템플릿 마감 (기한 연장)", "E027"),          # 제목에서 '다이제스트'가 빠져도 후보
+        item("A2", "이메일 다이제스트 템플릿 마감", "E027", "T-026"),  # 이미 중복 표시 → 다시 보지 않음
+        item("A3", "설정 화면 기획서", None),                           # 담당자 미정 → 볼 업무 목록 없음
+    ]
+    out = same_owner_candidates(items, [[t026, other], [t026], []])
+    assert out == {"A1": [t026]}

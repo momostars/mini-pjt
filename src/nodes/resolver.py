@@ -15,12 +15,15 @@ from langgraph.store.base import BaseStore
 from pydantic import BaseModel, Field
 
 from src.llm import get_llm
+from src.mcp_servers.task_server import similarity
 from src.memory import get_alias, get_prefs
+from src.nodes.context import judge_duplicates
 from src.nodes.common import employee_label, narrow_by_attendance, parse_attendance, toolbox
 from src.state import ActionItem
 from src.tools import ToolCallError, _calendar, to_business_day
 
 CONFIDENCE_REVIEW = 0.7
+SAME_OWNER_DUP_THRESHOLD = 0.3  # 같은 담당자의 진행 중 업무: 후보만 넓게 고르고 중복 여부는 LLM이 판단
 
 
 class ItemDecision(BaseModel):
@@ -116,17 +119,39 @@ async def _attendance(tb, minutes: str, config) -> Attendance:
     return Attendance(found[: len(present)], found[len(present):])
 
 
+LOOKUP_FAILED = "조직도 조회 실패"
+
+
 async def _find_candidates(tb, item: ActionItem, config) -> tuple[list[dict], bool]:
-    """(후보 직원 목록, 팀 단위 여부)."""
+    """(후보 직원 목록, 팀 단위 여부). 조직도 조회가 실패하면 후보 없음으로 두고 경고를 붙인다."""
     if not item.assignee_raw.strip():
         return [], False
-    found = await tb.call("find_employee", {"name": item.assignee_raw}, config)
-    if found.get("matches"):
-        return found["matches"], False
-    team = await tb.call("get_team_members", {"team": item.assignee_raw}, config)
-    if team.get("team"):
-        return team["members"], True
+    try:
+        found = await tb.call("find_employee", {"name": item.assignee_raw}, config)
+        if isinstance(found, dict) and found.get("matches"):
+            return found["matches"], False
+        team = await tb.call("get_team_members", {"team": item.assignee_raw}, config)
+        if isinstance(team, dict) and team.get("team"):
+            return team["members"], True
+    except ToolCallError as e:
+        item.warnings.append(f"{LOOKUP_FAILED}({e}) → 담당자 지정 필요")
     return [], False
+
+
+async def _resolve_due(tb, args: dict, config) -> tuple[dict | None, str | None]:
+    """resolve_date 호출. (결과, 실패 이유). 도구 오류와 형식이 틀린 응답을 실패로 돌려준다."""
+    try:
+        r = await tb.call("resolve_date", args, config)
+    except ToolCallError as e:
+        return None, str(e)
+    if not isinstance(r, dict):
+        return None, f"resolve_date 응답 형식 오류: {str(r)[:80]}"
+    try:
+        if r.get("date"):
+            date.fromisoformat(r["date"])
+    except (TypeError, ValueError):
+        return None, f"resolve_date 날짜 형식 오류: {r.get('date')!r}"
+    return r, None
 
 
 def _format_candidates(cands: list[dict], team_level: bool) -> str:
@@ -180,12 +205,33 @@ async def resolve(state: dict, config: RunnableConfig, *, store: BaseStore | Non
     decisions = {d.item_id: d for d in judged.items}
 
     # 3. 확정 + 날짜 계산 + 가용성·기존 업무 확인
-    await asyncio.gather(*(
+    open_tasks = await asyncio.gather(*(
         _finalize(tb, a, *cand_map[a.id], decisions.get(a.id), meeting_date, attendance,
                   learned.get(a.id), prefs, config)
         for a in items
     ))
+
+    # 4. 같은 담당자의 진행 중 업무와 중복 재확인 (M8)
+    #    Context의 중복 후보는 제목 글자 유사도로만 찾아, 제목 표현이 조금 달라지면 놓친다
+    #    ("이메일 템플릿 마감" ↔ T-026 "이메일 다이제스트 템플릿 디자인"). 담당자가 정해진 뒤에는
+    #    그 사람의 진행 중 업무만 보면 되므로 기준을 낮춰 후보를 고르고, 중복인지는 Context와 같은 LLM 판단에 맡긴다.
+    same_owner = same_owner_candidates(items, open_tasks)
+    if same_owner:
+        await judge_duplicates([a for a in items if a.id in same_owner], same_owner, meeting_date, config)
     return {"action_items": items, "done": ["resolver"]}
+
+
+def same_owner_candidates(items: list[ActionItem], open_tasks: list[list[dict]]) -> dict[str, list[dict]]:
+    """중복 표시가 없고 담당자가 정해진 할 일마다, 그 담당자의 진행 중 업무 중 제목이 조금이라도 비슷한 것(최대 3건)."""
+    out = {}
+    for item, tasks in zip(items, open_tasks):
+        if item.duplicate_of or not item.assignee_id:
+            continue
+        scored = sorted(((similarity(item.title, t["title"]), t) for t in tasks), key=lambda x: x[0], reverse=True)
+        cands = [t for score, t in scored if score >= SAME_OWNER_DUP_THRESHOLD][:3]
+        if cands:
+            out[item.id] = cands
+    return out
 
 
 async def _add_milestone_basis(tb, item: ActionItem, milestone: dict, meeting_date: str, config) -> None:
@@ -205,7 +251,8 @@ async def _add_milestone_basis(tb, item: ActionItem, milestone: dict, meeting_da
 
 async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
                     decision: ItemDecision | None, meeting_date: str | None, attendance: "Attendance",
-                    learned: dict | None, prefs: dict, config) -> None:
+                    learned: dict | None, prefs: dict, config) -> list[dict]:
+    """담당자·기한을 확정하고 경고를 붙인다. 담당자의 진행 중 업무 목록을 돌려준다 (중복 재확인용)."""
     active = [c for c in cands if c["status"] != "on_leave"]
     item.assignee_candidates = [c["id"] for c in active]
 
@@ -228,7 +275,8 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
         chosen = next((c for c in cands if c["id"] == decision.assignee_id), None)
 
     if not cands:
-        item.warnings.append(f"담당자 '{item.assignee_raw or '미정'}'을 조직도에서 찾지 못함 → 담당자 지정 필요")
+        if not any(w.startswith(LOOKUP_FAILED) for w in item.warnings):  # 조회 실패면 이미 경고가 있다
+            item.warnings.append(f"담당자 '{item.assignee_raw or '미정'}'을 조직도에서 찾지 못함 → 담당자 지정 필요")
     elif chosen and chosen["status"] == "on_leave":
         # 휴직 기간을 캘린더로 확인해 안내한다. 배정은 하지 않는다
         period = f"~{chosen.get('leave_until')}"
@@ -271,10 +319,20 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
         args = {"expression": expr, "base_date": meeting_date}
         if decision and decision.reference_date:
             args["reference_date"] = decision.reference_date
-        r = await tb.call("resolve_date", args, config)
+        r, error = await _resolve_due(tb, args, config)
+        r = r or {}
         item.due_date = date.fromisoformat(r["date"]) if r.get("date") else None
         item.due_ambiguous = bool(r.get("ambiguous"))
-        if item.due_date is None:
+        if error:
+            item.warnings.append(f"기한 '{item.due_raw}' 계산 실패({error}) → 기한 확인 필요")
+        elif item.due_date is None and r.get("reference_name"):
+            # 기준 일정이 일정표·과거 회의록에 없다 → 추측하지 않고 그 날짜를 묻는다
+            name = r["reference_name"]
+            item.warnings.append(
+                f"기한 '{item.due_raw}'의 기준 일정 '{name}' 날짜를 일정표·과거 회의록에서 찾지 못함 → "
+                f"'{name}' 날짜를 알려 주시거나 기한을 직접 정해 주세요 (예: '{item.id} 기한은 11/20로')"
+            )
+        elif item.due_date is None:
             item.warnings.append(f"기한 '{item.due_raw}'을 날짜로 바꾸지 못함 → 기한 확인 필요")
         elif item.due_ambiguous:
             item.warnings.append(f"기한 '{item.due_raw}'이 모호함 → {item.due_date}로 두고 확인 필요")
@@ -295,7 +353,7 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
         item.warnings.append(f"할 일인지 확신이 낮음(신뢰도 {item.confidence:.2f})")
 
     if not item.assignee_id:
-        return
+        return []
 
     # 휴가·부재 (회의 날짜 ~ 기한)
     if meeting_date:
@@ -312,12 +370,18 @@ async def _finalize(tb, item: ActionItem, cands: list[dict], team_level: bool,
                 )
         except ToolCallError as e:
             item.warnings.append(f"가용성 확인 실패: {e}")
+        except (AttributeError, KeyError, TypeError):  # 응답 형식이 틀림
+            item.warnings.append("가용성 확인 실패: check_availability 응답 형식 오류")
 
     # 기존 업무: 중복 의심 업무가 같은 담당자의 진행 중 업무인지
     try:
         listed = await tb.call("list_tasks", {"assignee_id": item.assignee_id}, config)
-        open_ids = {t["id"] for t in listed["tasks"] if t["status"] != "done"}
-        if item.duplicate_of and item.duplicate_of not in open_ids:
+        open_tasks = [t for t in listed["tasks"] if t["status"] != "done"]
+        if item.duplicate_of and item.duplicate_of not in {t["id"] for t in open_tasks}:
             item.warnings.append(f"중복 의심 업무 {item.duplicate_of}의 담당자가 다름")
+        return open_tasks
     except ToolCallError as e:
         item.warnings.append(f"기존 업무 확인 실패: {e}")
+    except (AttributeError, KeyError, TypeError):
+        item.warnings.append("기존 업무 확인 실패: list_tasks 응답 형식 오류")
+    return []

@@ -89,21 +89,20 @@ async def conflict_warnings(row: dict) -> tuple[list[str], list[str]]:
     from langchain_core.prompts import ChatPromptTemplate
 
     from src.llm import get_llm
-    from src.nodes.context import HUMAN, SEARCH_K, SYSTEM, ContextJudgement, _chunk
+    from src.nodes.context import HUMAN, SEARCH_K, SYSTEM, ContextJudgement, _chunk, best_hit, conflict_text
 
     # search_past_meetings 도구와 같은 형태로 변환
-    hits = [{"source": d.metadata["source"], "date": d.metadata["date"], "section": d.metadata["section"],
-             "content": d.page_content}
+    hits = [{"source": d.metadata["source"], "date": d.metadata["date"], "title": d.metadata.get("title", ""),
+             "section": d.metadata["section"], "content": d.page_content}
             for d in search_past_meetings(row["query"], k=SEARCH_K, before=row.get("before"))]
     decisions = f"[D1] {row['query']} (안건: {row['query']})\n" + "\n".join(_chunk(r) for r in hits)
     prompt = ChatPromptTemplate.from_messages([("system", SYSTEM), ("human", HUMAN)])
     judged: ContextJudgement = await (prompt | get_llm().with_structured_output(ContextJudgement)).ainvoke(
         {"meeting_date": row.get("before") or "알 수 없음", "decisions": decisions, "items": "(후보 없음)"}
     )
-    by_source = {r["source"]: r for r in hits}
     # Context Agent와 같이 검색 결과에 없는 출처는 버린다
-    found = [f"{by_source[c.source]['date']} {c.source}: {c.past_decision}"
-             for c in judged.conflicts if c.source in by_source]
+    found = [conflict_text(hit, c.past_decision) for c in judged.conflicts
+             if (hit := best_hit(hits, c.source, c.past_decision))]
     return found, [as_context(r["source"], r["content"]) for r in hits]
 
 

@@ -5,8 +5,8 @@ Agent가 재시도하거나, 멈추지 않고 사용자에게 알리는지(경�
 
 가짜 도구를 실제 Toolbox에 넣어 Toolbox.call의 오류 변환·PII 마스킹까지 함께 거친다.
 
-xfail(strict=True)는 1차 평가에서 확인한 미구현 동작이다 (round1_report.md, M8 개선 대상).
-고치고 나면 XPASS가 실패로 잡히므로 그때 표시를 지운다.
+1차 평가(round1_report.md)에서 xfail이던 6건은 M8에서 고쳤다
+(Toolbox 타임아웃·재시도, Resolver·Context의 도구 오류를 경고·안내로 바꿈).
 """
 
 import asyncio
@@ -117,17 +117,45 @@ def test_tool_error_becomes_readable_error_without_pii():
     assert "010-1234-5678" not in str(e.value)  # 오류 메시지도 출력물이라 마스킹
 
 
-@pytest.mark.xfail(strict=True, reason="M8: Toolbox에 일시 장애 재시도 없음")
 def test_transient_failure_is_retried():
     tool = FakeTool("find_employee", flaky(1, {"matches": []}))
-    tb = Toolbox([tool])
+    tb = Toolbox([tool], backoff=0.01)
     assert asyncio.run(tb.call("find_employee", {"name": "최우진"})) == {"matches": []}
     assert tool.calls == 2
 
 
-@pytest.mark.xfail(strict=True, reason="M8: Toolbox에 도구 호출 타임아웃 없음 (멈춘 도구를 계속 기다림)")
+def test_persistent_failure_gives_up_after_retries():
+    tool = FakeTool("find_employee", fail())
+    tb = Toolbox([tool], retries=2, backoff=0.01)
+    with pytest.raises(ToolCallError, match="3회 시도"):
+        asyncio.run(tb.call("find_employee", {"name": "최우진"}))
+    assert tool.calls == 3
+
+
+def test_tool_reported_error_is_not_retried():
+    # 도구가 정상적으로 알린 오류(직원 없음 등)는 다시 불러도 같다
+    from langchain_core.tools import ToolException
+
+    async def not_found(args, n):
+        raise ToolException("직원을 찾을 수 없음")
+
+    tool = FakeTool("find_employee", not_found)
+    with pytest.raises(ToolCallError):
+        asyncio.run(Toolbox([tool], backoff=0.01).call("find_employee", {"name": "고길동"}))
+    assert tool.calls == 1
+
+
+@pytest.mark.parametrize("name", ["create_task", "create_event", "update_task"])
+def test_write_tools_are_not_retried(name):
+    # 응답만 늦고 실제로는 처리됐을 수 있어, 다시 부르면 중복 등록된다
+    tool = FakeTool(name, flaky(1, {"id": "T-099"}))
+    with pytest.raises(ToolCallError):
+        asyncio.run(Toolbox([tool], backoff=0.01).call(name, {}))
+    assert tool.calls == 1
+
+
 def test_hanging_tool_times_out_with_tool_error():
-    tb = toolbox(check_availability=hang(30))
+    tb = Toolbox([FakeTool("check_availability", hang(30))], timeout=0.2, backoff=0.01)
 
     async def run():
         # 테스트가 멈추지 않도록 바깥에서 5초 제한. Toolbox가 그 전에 ToolCallError를 내야 통과
@@ -197,7 +225,6 @@ def test_unknown_assignee_asks_user():
     assert any("조직도에서 찾지 못함" in w for w in it.warnings)
 
 
-@pytest.mark.xfail(strict=True, reason="M8: resolve_date 실패를 잡지 않아 Resolver 전체가 멈춤")
 def test_date_tool_failure_becomes_warning():
     tb = toolbox(**{**HEALTHY, "resolve_date": fail()})
     it = asyncio.run(finalize(tb, item()))
@@ -205,7 +232,6 @@ def test_date_tool_failure_becomes_warning():
     assert any("기한" in w for w in it.warnings)
 
 
-@pytest.mark.xfail(strict=True, reason="M8: resolve_date가 JSON이 아닌 응답을 주면 str.get 오류로 멈춤")
 def test_malformed_date_response_becomes_warning():
     tb = toolbox(**{**HEALTHY, "resolve_date": garbage()})
     it = asyncio.run(finalize(tb, item()))
@@ -213,20 +239,24 @@ def test_malformed_date_response_becomes_warning():
     assert any("기한" in w for w in it.warnings)
 
 
-@pytest.mark.xfail(strict=True, reason="M8: 담당자 후보 조회(find_employee) 실패를 잡지 않아 Resolver 전체가 멈춤")
 def test_directory_failure_does_not_stop_resolver():
     tb = toolbox(find_employee=fail(), get_team_members=fail())
-    cands, team_level = asyncio.run(_find_candidates(tb, item(), {}))
-    assert (cands, team_level) == ([], False)  # 후보 없음 → _finalize가 '담당자 지정 필요' 경고
+    it = item()
+    cands, team_level = asyncio.run(_find_candidates(tb, it, {}))
+    assert (cands, team_level) == ([], False)
+    asyncio.run(finalize(toolbox(**HEALTHY), it, cands))
+    assert it.assignee_id is None
+    assert [w for w in it.warnings if "담당자" in w] == [w for w in it.warnings if w.startswith("조직도 조회 실패")]
 
 
 # ── Context: 과거 회의 검색·중복 확인 실패 ─────────────────
 
 
-@pytest.mark.xfail(strict=True, reason="M8: 과거 회의 검색·중복 확인 실패를 잡지 않아 Context 단계 전체가 멈춤")
 def test_context_search_failure_continues_without_context():
     tb = toolbox(search_past_meetings=fail("Chroma 인덱스를 열 수 없음"), find_duplicate_task=fail())
     state = {"meeting_meta": {"date": MEETING_DATE}, "action_items": [item()], "decisions": []}
     out = asyncio.run(gather_context(state, config(tb)))
     assert out["related_context"] == []
     assert out["action_items"][0].duplicate_of is None
+    notes = " ".join(out["guard_notes"])  # 검토 표·보고서에 보이는 안내
+    assert "과거 회의록 검색에 실패" in notes and "중복 확인에 실패" in notes

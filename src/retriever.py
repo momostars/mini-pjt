@@ -69,22 +69,39 @@ def _parse_meeting(path: Path) -> tuple[dict, list[tuple[str, str]]]:
     return meta, sections
 
 
-def load_documents(directory: Path = PAST_MEETINGS_DIR) -> list[Document]:
-    """회의록마다 안건 단위 청크를 만든다. 청크 앞에 날짜·회의명·섹션을 붙여 맥락을 살린다."""
+def _split_table_rows(body: str) -> list[str] | None:
+    """마크다운 표만 있는 섹션(Action Items)이면 '머리행 + 행 1개' 조각 목록, 아니면 None.
+    표 전체를 한 청크로 두면 서로 다른 할 일이 섞여 임베딩돼, 할 일 하나를 찾는 질의와 잘 맞지 않는다 (M8)."""
+    lines = [l for l in body.splitlines() if l.strip()]
+    if len(lines) < 3 or not all(l.lstrip().startswith("|") for l in lines):
+        return None
+    head, sep, rows = lines[0], lines[1], lines[2:]
+    if not re.fullmatch(r"\|[\s\-:|]+\|", sep.strip()):
+        return None
+    return [f"{head}\n{sep}\n{row}" for row in rows]
+
+
+def load_documents(directory: Path = PAST_MEETINGS_DIR, split_rows: bool = True) -> list[Document]:
+    """회의록마다 안건 단위 청크를 만든다. 청크 앞에 날짜·회의명·섹션을 붙여 맥락을 살린다.
+    split_rows=True면 표만 있는 섹션(Action Items)은 행마다 청크 하나로 나눈다."""
     if directory.resolve() != PAST_MEETINGS_DIR.resolve():
         raise ValueError(f"인덱싱 대상은 {PAST_MEETINGS_DIR}뿐입니다: {directory}")
 
     docs = []
     for path in sorted(directory.glob("*.md")):
         meta, sections = _parse_meeting(path)
-        for i, (name, body) in enumerate(sections):
+        i = 0
+        for name, body in sections:
             header = f"[{meta['date']} {meta['title']} · {name}]"
-            docs.append(
-                Document(
-                    page_content=f"{header}\n{body}",
-                    metadata={**meta, "section": name, "chunk_id": f"{path.stem}#{i}"},
+            pieces = (_split_table_rows(body) if split_rows else None) or [body]
+            for piece in pieces:
+                docs.append(
+                    Document(
+                        page_content=f"{header}\n{piece}",
+                        metadata={**meta, "section": name, "chunk_id": f"{path.stem}#{i}"},
+                    )
                 )
-            )
+                i += 1
     return docs
 
 
