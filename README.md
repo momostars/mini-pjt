@@ -483,6 +483,7 @@ mini-pjt_jihyeon_kim/
 │   ├── llm.py                    # Bedrock 모델·임베딩 생성
 │   ├── tracing.py                # 콜백 추적 (trace.jsonl 기록·집계)
 │   ├── cli.py                    # 실행 진입점 (HITL 대화)
+│   ├── healthcheck.py            # 실행 전 점검 (자격 증명, LLM, 임베딩, 검색 인덱스, MCP 서버)
 │   └── mcp_servers/              # 모의 사내 시스템 (MCP 서버)
 │       ├── common.py             # 경로, 조직도, SQLite 적재·초기화 (reset_all)
 │       ├── directory_server.py
@@ -502,17 +503,20 @@ mini-pjt_jihyeon_kim/
 │   ├── run_eval.py               # 추출·담당자·날짜·라우팅 지표
 │   ├── run_ragas.py              # RAG 평가 (Hit@k, RAGAS)
 │   ├── dataset/
-│   │   ├── meetings/             # 정답이 표시된 회의록 (기능 지표용)
+│   │   ├── meetings/gold.json    # 샘플 회의록 5건의 할 일 정답 (기능 지표용)
+│   │   ├── routing.jsonl         # test_queries 20건의 의도 정답
 │   │   └── retrieval.jsonl       # 검색 평가 질의와 정답
 │   ├── tests/                    # pytest (가드레일, 라우팅, 장애 주입)
 │   └── results/                  # 실행 결과, 평가별 trace.jsonl (git 제외)
+├── docs/
+│   └── demo.md                   # 데모 시나리오 (Streamlit 화면 기준, 약 7분)
 ├── logs/                         # trace.jsonl (git 제외)
+├── app.py                        # Streamlit 데모 화면
 ├── SERVICE.md                    # [규정] 서비스 스펙
 ├── README.md                     # [규정] 프로젝트 설명
 ├── requirements.txt              # [규정] 의존성
 ├── .env.example                  # 모델 ID, AWS 리전, 경로(추적 파일 포함)
-├── Dockerfile                    # [선택] 클린 환경 재현 (M9에서 작성)
-└── run.sh                        # [선택] 인덱싱 → 실행 → 평가 일괄 실행 (M9에서 작성)
+└── run.sh                        # [선택] 점검 → 인덱싱 → 데모 1건 → 평가 일괄 실행 (Dockerfile은 만들지 않음, M9 결정)
 ```
 
 - `src/`, `evaluation/`은 `__init__.py` 없이 네임스페이스 패키지로 두고, 프로젝트 루트에서 `python -m src.cli`, `python -m evaluation.run_test_queries`처럼 실행합니다
@@ -629,8 +633,8 @@ Streamlit도 같은 방식입니다. `thread_id`를 `st.session_state`에 저장
 
 ```bash
 # .env.example
-MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0
-AWS_REGION=us-east-1
+MODEL=global.anthropic.claude-sonnet-4-5-20250929-v1:0
+AWS_REGION=ap-northeast-2
 # AWS 자격 증명은 AWS CLI 프로필 또는 환경 변수로 설정
 ```
 
@@ -639,9 +643,9 @@ AWS_REGION=us-east-1
 import os
 from langchain_aws import BedrockEmbeddings, ChatBedrockConverse
 
-MODEL = os.getenv("MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+MODEL = os.getenv("MODEL", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
-REGION = os.getenv("AWS_REGION", "us-east-1")
+REGION = os.getenv("AWS_REGION", "ap-northeast-2")
 
 def get_llm(temperature: float = 0.0):
     return ChatBedrockConverse(model=MODEL, region_name=REGION, temperature=temperature)
@@ -652,6 +656,7 @@ def get_embeddings():
 
 - 추출, 라우팅, 검증 노드는 결과가 일정하도록 `temperature=0`을 씁니다
 - 평가(LLM-as-judge)도 같은 모델을 쓰고, 프롬프트만 분리합니다
+- 리전은 서울(`ap-northeast-2`)을 씁니다. M8 평가 중 `us-east-1`에서 일일 토큰 한도(`Too many tokens per day`)에 여러 번 걸려 옮겼고, 지연도 줄었습니다. 서울 리전에서는 `global.` 추론 프로필 ID만 쓸 수 있습니다(`apac.`·`us.`는 안 됨). Titan 임베딩은 리전과 관계없이 같은 벡터를 내므로(코사인 0.9998) 인덱스를 다시 만들 필요가 없습니다
 
 ---
 
@@ -668,7 +673,7 @@ def get_embeddings():
 | **M6** 기억과 관측 ✅ | 장기 기억 Store, 콜백 추적(`trace.jsonl`) 연결 | `memory.py`, `tracing.py` | Day7 |
 | **M7** 1차 자체 평가 ✅ | 인-아웃 세트 실행, 기능 지표·RAGAS 측정, 장애 주입 테스트 | `round1_report.md` | Day 9 |
 | **M8** 개선·2차 자체 평가 ✅ | 1차 실패 케이스 개선 후 재평가 | `round2_report.md` | Day 10 |
-| **M9** 마무리 | 데모 시나리오, (선택) Dockerfile·run.sh·Streamlit, 발표 자료 | 데모 영상 / 발표 자료 | |
+| **M9** 마무리 ✅ | 데모 시나리오, Streamlit 화면, 실행 전 점검, run.sh (Dockerfile·발표 자료는 생략) | `docs/demo.md`, `app.py`, `healthcheck.py`, `run.sh` | |
 
 > 우선순위: **M1 → M3 → M4 → M5**가 핵심 경로입니다. 시간이 부족하면 M2(RAG)와 M6(기억)를 간소화합니다.
 
@@ -686,18 +691,31 @@ def get_embeddings():
 
 ---
 
-## 10. 실행 방법 (구현 후 작성)
+## 10. 실행 방법
 
 ```bash
 # 설치
 pip install -r requirements.txt
-cp .env.example .env               # 값 채우기
+cp .env.example .env               # AWS 키, 리전(ap-northeast-2) 채우기
 
-# 과거 회의록 인덱싱
+# 실행 전 점검: 자격 증명, LLM, 임베딩, 검색 인덱스, MCP 서버 3개. 실패하면 원인과 조치를 안내
+python -m src.healthcheck
+
+# 과거 회의록 인덱싱 (data/past_meetings만)
 python -m src.retriever --ingest
 
 # 실행
-python -m src.cli data/samples/20261102_weekly.md
+streamlit run app.py                                   # 데모 화면 (http://localhost:8501)
+python -m src.cli data/samples/20261102_weekly.md      # CLI (검토 단계에서 approve / reject / 수정 문장)
+python -m src.cli data/samples/20261102_weekly.md --reset --auto approve   # DB 초기화 후 자동 승인
+
+# 한 번에 실행 (Windows는 Git Bash)
+./run.sh --quick     # 점검 → 인덱싱 → 데모 1건 → LLM 없는 테스트 (2~3분)
+./run.sh             # 위 + 인-아웃 20건, 기능 지표, RAGAS, 전체 테스트 (30분 안팎, 토큰을 많이 씀)
+
+# 장기 기억 관리 (HITL 수정에서 배운 호칭 등)
+python -m src.memory list
+python -m src.memory forget-alias "QA 쪽"
 
 # 평가
 python -m evaluation.run_test_queries   # 과제 인-아웃 테스트 (test_queries.csv)
@@ -709,3 +727,6 @@ pytest evaluation/tests
 # 추적 집계 (노드 지연 시간, 토큰, 도구 호출 성공률)
 python -m src.tracing logs/trace.jsonl
 ```
+
+- 데모 진행 순서는 [docs/demo.md](docs/demo.md)에 있습니다
+- 평가 스크립트는 끝날 때 trace의 오류 이벤트를 세어, 권한·한도 문제로 결과가 오염됐으면 ⚠ 경고를 냅니다(`summary.json`의 `trace_errors`)

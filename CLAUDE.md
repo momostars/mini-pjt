@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MeetingOps Agent는 회의록에서 할 일을 뽑아 담당자·기한을 확정하고, 사람의 승인(HITL)을 받은 뒤 모의 MCP 서버로 업무와 일정을 등록하는 LangGraph Multi-Agent입니다. SDS AX 과정 Mini PJT입니다. 문서가 모두 한국어이므로 새 문서와 사용자에게 보이는 문구도 한국어로 씁니다.
 
-**지금은 계획 단계(M0)만 끝났고 `src/`는 아직 없습니다.** 상세 설계는 이 파일에 옮기지 않고 아래 문서에서만 관리합니다. 설계가 바뀌면 README를 고칩니다.
+**M0~M9를 모두 마쳤습니다** (평가 결과는 `evaluation/round2_report.md`, 데모 순서는 `docs/demo.md`). 상세 설계는 이 파일에 옮기지 않고 아래 문서에서만 관리합니다. 설계가 바뀌면 README를 고칩니다.
 - `README.md`: 구현 기준 문서
   - 3장: 흐름, Agent 역할, 도구 배정
   - 4.4절: HITL 승인 규칙
@@ -16,16 +16,19 @@ MeetingOps Agent는 회의록에서 할 일을 뽑아 담당자·기한을 확�
 - `data/README.md`: 모의 데이터 설명과 샘플별 정답
 - `evaluation/test_queries.csv`: 채점용 인-아웃 케이스 20건
 
-## 명령어 (계획, README 10장)
+## 명령어 (README 10장)
 
 모든 명령은 프로젝트 루트에서 실행합니다. `src/`와 `evaluation/`은 `__init__.py`가 없는 네임스페이스 패키지라서 항상 `python -m`으로 실행합니다.
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env                      # Bedrock 모델 ID, AWS 리전·키, 경로
+cp .env.example .env                      # Bedrock 모델 ID, AWS 리전(ap-northeast-2)·키, 경로
+python -m src.healthcheck                 # 실행 전 점검. 평가·데모 전에 먼저 돌린다
 python -m src.tracing logs/trace.jsonl    # 추적 집계 (노드 지연, 토큰, 도구 성공률)
 python -m src.retriever --ingest          # data/past_meetings를 Chroma에 인덱싱
 python -m src.cli data/samples/20261102_weekly.md
+streamlit run app.py                      # 데모 화면 (docs/demo.md)
+./run.sh --quick                          # 점검 → 인덱싱 → 데모 1건 → LLM 없는 테스트 (Git Bash)
 python -m evaluation.run_test_queries     # 채점용 인-아웃 테스트
 python -m evaluation.run_eval             # 기능 지표
 python -m evaluation.run_ragas            # Hit@k (--ragas: RAGAS까지)

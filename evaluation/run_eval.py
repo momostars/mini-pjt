@@ -38,6 +38,7 @@ from src.memory import sqlite_store
 from src.nodes.guard import guard_input
 from src.nodes.router import REFUSALS, route
 from src.tools import open_toolbox
+from src.tracing import error_counts, warn_if_errors
 
 GOLD = Path("evaluation/dataset/meetings/gold.json")
 ROUTING = Path("evaluation/dataset/routing.jsonl")
@@ -276,6 +277,7 @@ async def main_async(only: str | None) -> None:
         summary["routing"] = metrics
         write_csv(out_dir / "routing.csv", rows)
 
+    summary["trace_errors"] = sum(error_counts(out_dir / "trace.jsonl").values())
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n| 지표 | 목표 | 결과 | 판정 |")
@@ -285,6 +287,7 @@ async def main_async(only: str | None) -> None:
         if name in flat:
             print(f"| {name} | {target} | {flat[name]} | {verdict(name, flat[name])} |")
     print(f"\n결과: {out_dir}")
+    warn_if_errors(out_dir / "trace.jsonl")
 
 
 def main() -> None:

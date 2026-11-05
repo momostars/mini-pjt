@@ -15,6 +15,9 @@ langchain-mcp-adapters==0.3.2
 langchain-chroma==1.1.0
 chromadb==1.5.9
 
+# 데모 화면 (M9)
+streamlit==1.66.1
+
 # 공통
 pydantic==2.14.2
 python-dotenv==1.2.4

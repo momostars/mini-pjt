@@ -204,6 +204,28 @@ def tools_called(events: list[dict], trace_id: str | None = None) -> set[str]:
     return {e["tool"] for e in events if e["event"] == "tool_end" and (trace_id is None or e["trace_id"] == trace_id)}
 
 
+def error_counts(path: str | Path) -> dict[str, int]:
+    """trace 파일의 오류 이벤트 수 (도구·모델 이름별). 평가가 끝난 뒤 장애가 섞였는지 확인하는 용도."""
+    if not Path(path).exists():
+        return {}
+    counts: dict[str, int] = defaultdict(int)
+    for e in load_events(path):
+        if e["event"] == "error":
+            counts[e.get("tool") or e.get("name") or e.get("error_type") or "unknown"] += 1
+    return dict(counts)
+
+
+def warn_if_errors(path: str | Path) -> int:
+    """오류가 있으면 경고를 출력하고 총 건수를 돌려준다."""
+    counts = error_counts(path)
+    total = sum(counts.values())
+    if total:
+        detail = ", ".join(f"{k} {v}건" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+        print(f"\n⚠ 실행 중 오류 {total}건 ({detail}). 권한·한도 문제로 결과가 오염됐을 수 있습니다. "
+              "python -m src.healthcheck 로 확인 후 다시 실행하세요.")
+    return total
+
+
 def summarize(events: list[dict]) -> dict[str, dict]:
     runs: dict[str, dict] = defaultdict(lambda: {
         "nodes": defaultdict(lambda: {"count": 0, "latency_ms": 0}),

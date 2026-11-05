@@ -7,9 +7,9 @@ from langchain_aws import BedrockEmbeddings, ChatBedrockConverse
 
 load_dotenv()
 
-MODEL = os.getenv("MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+MODEL = os.getenv("MODEL", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
-REGION = os.getenv("AWS_REGION", "us-east-1")
+REGION = os.getenv("AWS_REGION", "ap-northeast-2")
 
 
 def get_llm(temperature: float = 0.0, max_tokens: int = 4096) -> ChatBedrockConverse:

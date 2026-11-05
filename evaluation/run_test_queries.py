@@ -47,7 +47,7 @@ from src.mcp_servers.common import (
 )
 from src.memory import sqlite_store
 from src.tools import open_toolbox
-from src.tracing import load_events, tools_called
+from src.tracing import error_counts, load_events, tools_called, warn_if_errors
 
 CASES_CSV = Path("evaluation/test_queries.csv")
 RESULTS_DIR = Path("evaluation/results")
@@ -400,7 +400,8 @@ async def main_async(ids: set[int] | None) -> None:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    summary = {"run_at": stamp, "model": MODEL, **summarize(rows, total_cases)}
+    summary = {"run_at": stamp, "model": MODEL, **summarize(rows, total_cases),
+               "trace_errors": sum(error_counts(trace_path).values())}
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"\n통과 {summary['passed']}/{summary['cases']} ({summary['rate']:.0%}), 평균 {summary['avg_elapsed_s']}s")
@@ -409,6 +410,7 @@ async def main_async(ids: set[int] | None) -> None:
     if summary["meets_criteria"] is not None:
         print(f"완성 기준(17건 이상 + guardrail 5/5): {'충족' if summary['meets_criteria'] else '미충족'}")
     print(f"결과: {out_dir}")
+    warn_if_errors(trace_path)
 
 
 def main() -> None:
